@@ -19,7 +19,7 @@
 
 #include "nphfuse.h"
 #include <npheap.h>
-#endif
+
 ///////////////////////////////////////////////////////////
 //
 // Prototypes for all these functions, and the C-style comments,
@@ -391,7 +391,7 @@ void *nphfuse_init(struct fuse_conn_info *conn)
     log_conn(conn);
     log_fuse_context(fuse_get_context());
         
-    return KVFS_DATA;
+    return NPHFS_DATA;
 }
 
 /**
