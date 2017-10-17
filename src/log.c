@@ -48,7 +48,7 @@ void log_msg(const char *format, ...)
     va_list ap;
     va_start(ap, format);
 
-    vfprintf(KVFS_DATA->logfile, format, ap);
+    vfprintf(NPHFS_DATA->logfile, format, ap);
 }
 
 // Report errors to logfile and give -errno to caller
