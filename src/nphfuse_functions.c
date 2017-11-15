@@ -31,7 +31,7 @@
  * ignored.  The 'st_ino' field is ignored except if the 'use_ino'
  * mount option is given.
  */
-static void nphfuse_abspath(char abspath[MAX_PATH],const char *path)
+static void nphfuse_abspath(char abspath[PATH_MAX],const char *path)
 {
   strcpy(abspath, NPHFS_DATA->device_name);
   strncat(abspath, path, PATH_MAX); // extremely long paths will break
@@ -48,7 +48,7 @@ int nphfuse_getattr(const char *path, struct stat *stbuf)
     return -ENOENT;
   }
   nphfuse_abspath(abspath,path);
-  retval = lstat(abspath,statbuf);
+  retval = log_syscall("lstat", lstat(abspath, stbuf), 0);
   log_msg("lstat for abspath \"%s\" returned \"%d\"\n",abspath,retval);
   
  return retval;   
@@ -320,7 +320,21 @@ int nphfuse_removexattr(const char *path, const char *name)
  */
 int nphfuse_opendir(const char *path, struct fuse_file_info *fi)
 {
+  int retval = 1;
+  DIR *dir;
+  char abspath[PATH_MAX];
+  if (path == NULL){
+    log_msg("ENOENT for path in getattr");
     return -ENOENT;
+  }
+  nphfuse_abspath(abspath,path);
+  dir = opendir(abspath);
+  if (dir == NULL){
+    log_msg("dir returned null in opendir\n");
+    return -1;
+  }
+fi -> fh = (intptr_t) dir ;
+return retval;
 }
 
 /** Read directory
@@ -348,10 +362,11 @@ int nphfuse_opendir(const char *path, struct fuse_file_info *fi)
 int nphfuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset,
   struct fuse_file_info *fi)
 { 
+  log_msg("Problem in readdir\n");
   int retval = 1;
   int retstat = 1;
   char abspath[PATH_MAX];
-  char temppath[PATHMAX];
+  char temppath[PATH_MAX];
   DIR *dir;
   struct dirent *dent;
   struct stat *metadata;
@@ -368,15 +383,15 @@ int nphfuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t o
     return retval;
   }
   while ((dent = readdir(dir)) != NULL){
-    temppath = abspath;
-    strncat(temppath,dent->dname,PATH_MAX); 
-    retstat = lstat(temppath,metadata)
+    strcpy(temppath,abspath);
+    strncat(temppath,dent->d_name,PATH_MAX); 
+    retstat = lstat(temppath,metadata);
     if(!retstat){
-      if (!filler(buf,dent->dname,metadata,0)){
-        log_msg("File \"%s\" data copied to buffer ",dent->dname);
+      if (!filler(buf,dent->d_name,metadata,0)){
+        log_msg("File \"%s\" data copied to buffer ",dent->d_name);
       }
       else {
-        log_msg("Filler fail/buffer overflow for File \"%s\" ",dent->dname);
+        log_msg("Filler fail/buffer overflow for File \"%s\" ",dent->d_name);
       }
     }
   }
