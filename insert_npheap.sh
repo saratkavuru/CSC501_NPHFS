@@ -7,5 +7,5 @@ sudo chmod 777 /dev/npheap
 #./configure
 #make
 #sudo make install
-#nphfuse /dev/npheap testdir -s -d 
+#nphfuse -s -d /dev/npheap testdir 
 

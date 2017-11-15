@@ -31,10 +31,27 @@
  * ignored.  The 'st_ino' field is ignored except if the 'use_ino'
  * mount option is given.
  */
+static void nphfuse_abspath(char abspath[MAX_PATH],const char *path)
+{
+  strcpy(abspath, NPHFS_DATA->device_name);
+  strncat(abspath, path, PATH_MAX); // extremely long paths will break
+  log_msg("nphfs_fullpath:  rootdir = \"%s\", path = \"%s\", abspath = \"%s\"\n",
+      NPHFS_DATA->device_name, path, abspath);
+}
+
 int nphfuse_getattr(const char *path, struct stat *stbuf)
 {
+  int retval = 1;
+  char abspath[PATH_MAX];
+  if (path == NULL){
+    log_msg("ENOENT for path in getattr");
     return -ENOENT;
-    
+  }
+  nphfuse_abspath(abspath,path);
+  retval = lstat(abspath,statbuf);
+  log_msg("lstat for abspath \"%s\" returned \"%d\"\n",abspath,retval);
+  
+ return retval;   
 }
 
 /** Read the target of a symbolic link
@@ -67,7 +84,16 @@ int nphfuse_mknod(const char *path, mode_t mode, dev_t dev)
 /** Create a directory */
 int nphfuse_mkdir(const char *path, mode_t mode)
 {
+  int retval = 1;
+  char abspath[PATH_MAX];
+  if (path == NULL){
+    log_msg("ENOENT for path in getattr");
     return -ENOENT;
+  }
+  nphfuse_abspath(abspath,path);
+  retval = mkdir(abspath,mode);
+  log_msg("mkdir for abspath \"%s\" with mode \"%o\"returned \"%d\"\n",abspath,mode,retval);
+  return retval;
 }
 
 /** Remove a file */
@@ -320,9 +346,42 @@ int nphfuse_opendir(const char *path, struct fuse_file_info *fi)
  */
 
 int nphfuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset,
-	       struct fuse_file_info *fi)
-{
+  struct fuse_file_info *fi)
+{ 
+  int retval = 1;
+  int retstat = 1;
+  char abspath[PATH_MAX];
+  char temppath[PATHMAX];
+  DIR *dir;
+  struct dirent *dent;
+  struct stat *metadata;
+  if (path == NULL){
+    log_msg("ENOENT for path in readdir");
     return -ENOENT;
+  }
+  nphfuse_abspath(abspath,path);
+  dir = (DIR *)abspath;
+  //dir = (DIR *) (uintptr_t) fi -> fh;
+  dent = readdir(dir);
+  if(dent == 0){
+    log_msg("No entries in the directory \"%s\"", abspath);
+    return retval;
+  }
+  while ((dent = readdir(dir)) != NULL){
+    temppath = abspath;
+    strncat(temppath,dent->dname,PATH_MAX); 
+    retstat = lstat(temppath,metadata)
+    if(!retstat){
+      if (!filler(buf,dent->dname,metadata,0)){
+        log_msg("File \"%s\" data copied to buffer ",dent->dname);
+      }
+      else {
+        log_msg("Filler fail/buffer overflow for File \"%s\" ",dent->dname);
+      }
+    }
+  }
+  retval = 0;
+  return retval;
 }
 
 /** Release directory
