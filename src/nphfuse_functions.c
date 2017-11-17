@@ -95,7 +95,6 @@ return p;
 void initialize_newnode(struct nphfs_file *node){
   strcpy(node->path,"0");
   strcpy(node->parent_path,"0");
-  node->parent_path = NULL;
   node->data_offset = -1;
   memset(&node->metadata,0,sizeof(struct stat));
   node->fdflag = -1;
