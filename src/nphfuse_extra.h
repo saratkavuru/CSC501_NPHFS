@@ -6,6 +6,7 @@
 
   You may extend this file if necessary  
 */
+#include<sys/stat.h>
 
 struct nphfuse_state {
     FILE *logfile;

@@ -19,7 +19,7 @@
 
 #include "nphfuse.h"
 #include <npheap.h>
-
+#include <stdbool.h>
 ///////////////////////////////////////////////////////////
 //
 // Prototypes for all these functions, and the C-style comments,
@@ -35,7 +35,7 @@
 bool *fsbitmap = npheap_alloc(NPHFS_DATA -> devfd,0,8192);
 bool *dbitmap = npheap_alloc(NPHFS_DATA -> devfd,1,8192);
 
-struct *nphfs_file search(const char *path){
+struct nphfs_file* search(const char *path){
   int i = 2 ;
  bool *temp = fsbitmap + 2;
  struct nphfs_file *search_result;
@@ -93,12 +93,13 @@ return p;
 }
 
 void initialize_newnode(struct nphfs_file *node){
-  node->path = NULL;
+  strcpy(node->path,"0");
+  strcpy(node->parent_path,"0");
   node->parent_path = NULL;
-  node->data = -1;
-  memset(node->metadata,0,sizeof(struct stat));
+  node->data_offset = -1;
+  memset(&node->metadata,0,sizeof(struct stat));
   node->fdflag = -1;
-  node->filename = NULL;
+  strcpy(node->filename,"0");
   node->fsize = 0;
 }
 
@@ -112,9 +113,9 @@ int nphfuse_getattr(const char *path, struct stat *stbuf)
   }
   search_result = search(path);
   if(search_result != NULL){
-    stbuf = search_result->metadata;
+    stbuf = &search_result->metadata;
   }
-  log_msg("lstat for path \"%s\" returned \"%d\"\n",abspath,retval);
+  log_msg("getattr for path \"%s\" returned \"%d\"\n",path,retval);
   return retval;   
 }
 
@@ -178,7 +179,7 @@ int nphfuse_mkdir(const char *path, mode_t mode)
   if (res){
    log_msg("Set bit map failed\n");
   }
-  initialize_newnode(newnode);
+  initialize_newnode(*newnode);
   strcpy(newnode->path,path);
   strcpy(newnode->parent_path,parent_path);
   //Not changing data offset since this is a directory.
@@ -474,7 +475,7 @@ int nphfuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t o
    if (&temp){
     search_result = npheap_alloc(NPHFS_DATA -> devfd,i,8192);
     if(strcmp(search_result -> parent_path,path)==0){
-     if (!filler(buf,search_result->filename,search_result->metadata,0)){
+     if (!filler(buf,search_result->filename,&search_result->metadata,0)){
       log_msg("File \"%s\" data copied to buffer\n",search_result->filename);
     }
     else {
