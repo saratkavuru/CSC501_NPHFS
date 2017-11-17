@@ -173,12 +173,12 @@ int nphfuse_mkdir(const char *path, mode_t mode)
   }
   fs_bmoffset = search_bitmap(0);
   log_msg("Creating new node for \"%s\" with parent \"%s\"\n",path,parent_path);
-  struct npfhs_file *newnode = npheap_alloc(NPHFS_DATA->devfd,fs_bmoffset,8192);
+  struct nphfs_file *newnode = npheap_alloc(NPHFS_DATA->devfd,fs_bmoffset,8192);
   res = set_bitmap(0,fs_bmoffset,true);
   if (res){
    log_msg("Set bit map failed\n");
   }
-  initialize_newnode(*newnode);
+  initialize_newnode(newnode);
   strcpy(newnode->path,path);
   strcpy(newnode->parent_path,parent_path);
   //Not changing data offset since this is a directory.
@@ -189,9 +189,9 @@ int nphfuse_mkdir(const char *path, mode_t mode)
   newnode->metadata.st_mode = mode & ~(context->umask) & 0777; 
   newnode->metadata.st_uid = context->uid;
   newnode->metadata.st_gid = context->gid;
-  newnode->metadata.st_atim = (time_t)time(NULL);
-  newnode->metadata.st_mtim = (time_t)time(NULL);
-  newnode->metadata.st_ctim = (time_t)time(NULL);
+  newnode->metadata.st_atime = (time_t)time(NULL);
+  newnode->metadata.st_mtime = (time_t)time(NULL);
+  newnode->metadata.st_ctime = (time_t)time(NULL);
   //fdflag = 1 for directories
   newnode->fdflag = 1; 
   strcpy(newnode->filename,filename);
