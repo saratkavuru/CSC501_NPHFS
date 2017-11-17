@@ -52,7 +52,7 @@ struct *nphfs_file search(const char *path){
  return NULL;
 } 
 
-int set_bitmap(int offset,int flag,bool value){
+int set_bitmap(int flag,int offset,bool value){
 //flag is 0 for fs and 1 for data bitmaps
 if(!flag){
   bool *temp = fsbitmap + 2 + offset;
@@ -149,37 +149,44 @@ int nphfuse_mknod(const char *path, mode_t mode, dev_t dev)
 int nphfuse_mkdir(const char *path, mode_t mode)
 {
   int retval = 1;
+  int res = 0;
   int fs_bmoffset = 0;
   char *filename;
   char *parent_path;
   struct nphfs_file *search_result,*parent;
   struct fuse_context *context;
   if (path == NULL){
-    log_msg("ENOENT for path in getattr");
+    log_msg("ENOENT for path in getattr\n");
     return -ENOENT;
   }
   search_result = search(path);
   if (search_result != NULL){
-    log_msg("Cannot create \"%s\" : F/D already exists",path);
+    log_msg("Cannot create \"%s\" : F/D already exists\n",path);
     return -1;
   }
   filename = split_path(path);
   strncpy(parent_path, path, strlen(path)-strlen(filename));
   parent = search(parent_path);
   if (parent == NULL){
-    log_msg("Cannot create \"%s\" : Parent not found for \"%s\"",path,parent_path);
+    log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",path,parent_path);
     return -1;
   }
-  fs_bmoffset=search_bitmap(0);
-  log_msg("Creating new node for \"%s\" with parent \"%s\"",path,parent_path);
+  fs_bmoffset = search_bitmap(0);
+  log_msg("Creating new node for \"%s\" with parent \"%s\"\n",path,parent_path);
   struct npfhs_file *newnode = npheap_alloc(NPHFS_DATA->devfd,fs_bmoffset,8192);
+  res = set_bitmap(0,fs_bmoffset,true);
+  if (res){
+   log_msg("Set bit map failed\n");
+  }
   initialize_newnode(newnode);
   strcpy(newnode->path,path);
   strcpy(newnode->parent_path,parent_path);
   //Not changing data offset since this is a directory.
-  context = fuse_get_context() ;
-  newnode->metadata.st_mode = mode & ~context->umask & 0777; 
   newnode->metadata.st_nlink = 1;
+  //Should increment numlink in parent.
+  parent->metadata.st_nlink ++;
+  context = fuse_get_context() ;
+  newnode->metadata.st_mode = mode & ~(context->umask) & 0777; 
   newnode->metadata.st_uid = context->uid;
   newnode->metadata.st_gid = context->gid;
   newnode->metadata.st_atim = (time_t)time(NULL);
@@ -416,21 +423,11 @@ int nphfuse_removexattr(const char *path, const char *name)
  */
 int nphfuse_opendir(const char *path, struct fuse_file_info *fi)
 {
-  int retval = 1;
-  DIR *dir;
-  char abspath[PATH_MAX];
   if (path == NULL){
-    log_msg("ENOENT for path in getattr");
+    log_msg("ENOENT for path \"%s\" in opendir\n",path);
     return -ENOENT;
   }
-  nphfuse_abspath(abspath,path);
-  dir = opendir(abspath);
-  if (dir == NULL){
-    log_msg("dir returned null in opendir\n");
-    return -1;
-  }
-fi -> fh = (intptr_t) dir ;
-return retval;
+ return 0;
 }
 
 /** Read directory
@@ -458,41 +455,37 @@ return retval;
 int nphfuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset,
   struct fuse_file_info *fi)
 { 
-  log_msg("Problem in readdir\n");
-  int retval = 1;
-  int retstat = 1;
-  char abspath[PATH_MAX];
-  char temppath[PATH_MAX];
-  DIR *dir;
-  struct dirent *dent;
-  struct stat *metadata;
+
+  struct nphfs_file *search_result;
+  
   if (path == NULL){
-    log_msg("ENOENT for path in readdir");
+    log_msg("ENOENT for path in readdir\n");
     return -ENOENT;
   }
-  nphfuse_abspath(abspath,path);
-  dir = (DIR *)abspath;
-  //dir = (DIR *) (uintptr_t) fi -> fh;
-  dent = readdir(dir);
-  if(dent == 0){
-    log_msg("No entries in the directory \"%s\"", abspath);
-    return retval;
+  search_result = search(path);
+  if (search_result == NULL){
+    log_msg("directory \"%s\" doesn't exist\n ",path);
+    return -1;
   }
-  while ((dent = readdir(dir)) != NULL){
-    strcpy(temppath,abspath);
-    strncat(temppath,dent->d_name,PATH_MAX); 
-    retstat = lstat(temppath,metadata);
-    if(!retstat){
-      if (!filler(buf,dent->d_name,metadata,0)){
-        log_msg("File \"%s\" data copied to buffer ",dent->d_name);
-      }
-      else {
-        log_msg("Filler fail/buffer overflow for File \"%s\" ",dent->d_name);
-      }
+  //Fill all the nodes with parent_path=path in buffer 
+  int i = 2 ;
+  bool *temp = fsbitmap + 2;
+  while(i < 8192){
+   if (&temp){
+    search_result = npheap_alloc(NPHFS_DATA -> devfd,i,8192);
+    if(strcmp(search_result -> parent_path,path)==0){
+     if (!filler(buf,search_result->filename,search_result->metadata,0)){
+      log_msg("File \"%s\" data copied to buffer\n",search_result->filename);
     }
+    else {
+      log_msg("Filler fail/buffer overflow for File \"%s\" ",search_result->filename);      
+    } 
   }
-  retval = 0;
-  return retval;
+}
+i++;
+temp++;
+}
+return 0;
 }
 
 /** Release directory
