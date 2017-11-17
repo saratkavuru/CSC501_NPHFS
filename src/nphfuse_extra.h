@@ -12,3 +12,15 @@ struct nphfuse_state {
     char *device_name;
     int devfd;
 };
+
+struct nphfs_file {
+	//int inode;
+	//int p_inode;
+	char path[PATH_MAX];
+	char parent_path[PATH_MAX];
+	int data_offset;
+	struct stat metadata;
+	int fdflag;
+	char filename[250];
+	unsigned long fsize;
+};

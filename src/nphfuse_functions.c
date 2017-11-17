@@ -31,27 +31,91 @@
  * ignored.  The 'st_ino' field is ignored except if the 'use_ino'
  * mount option is given.
  */
-static void nphfuse_abspath(char abspath[PATH_MAX],const char *path)
-{
-  strcpy(abspath, NPHFS_DATA->device_name);
-  strncat(abspath, path, PATH_MAX); // extremely long paths will break
-  log_msg("nphfs_fullpath:  rootdir = \"%s\", path = \"%s\", abspath = \"%s\"\n",
-      NPHFS_DATA->device_name, path, abspath);
+//Reserving offsets 0 and 1 for bitmaps
+bool *fsbitmap = npheap_alloc(NPHFS_DATA -> devfd,0,8192);
+bool *dbitmap = npheap_alloc(NPHFS_DATA -> devfd,1,8192);
+
+struct *nphfs_file search(const char *path){
+  int i = 2 ;
+ bool *temp = fsbitmap + 2;
+ struct nphfs_file *search_result;
+ while(i < 8192){
+ if (&temp){
+  search_result = npheap_alloc(NPHFS_DATA -> devfd,i,8192);
+  if(strcmp(search_result -> path,path)==0){
+    return search_result ; 
+  }
+ }
+  i++;
+  temp++;
+ }
+ return NULL;
+} 
+
+int set_bitmap(int offset,int flag,bool value){
+//flag is 0 for fs and 1 for data bitmaps
+if(!flag){
+  bool *temp = fsbitmap + 2 + offset;
+  &temp = value;
+  return 0;
+}
+else{
+  bool *temp = dbitmap + offset - 8192;
+  &temp = value;
+  return 0;
+}
+return 1;
+}
+
+int search_bitmap(int flag){
+//flag is 0 for fs and 1 for data bitmaps
+int i; 
+if(!flag){
+  bool *temp = fsbitmap + 2;
+  i=2;
+}
+else{
+  bool *temp = dbitmap;
+  i=8192;
+}
+while(temp){ 
+ i++;
+ temp++; 
+}
+return i;
+}
+
+char* split_path(const char *path){
+char *p =strrchr(path,'/');
+// Returns /filename. So, we have to remove / for filename and remove length
+// of this from path.
+return p;
+}
+
+void initialize_newnode(struct nphfs_file *node){
+  node->path = NULL;
+  node->parent_path = NULL;
+  node->data = -1;
+  memset(node->metadata,0,sizeof(struct stat));
+  node->fdflag = -1;
+  node->filename = NULL;
+  node->fsize = 0;
 }
 
 int nphfuse_getattr(const char *path, struct stat *stbuf)
 {
   int retval = 1;
-  char abspath[PATH_MAX];
+  struct nphfs_file *search_result;
   if (path == NULL){
     log_msg("ENOENT for path in getattr");
     return -ENOENT;
   }
-  nphfuse_abspath(abspath,path);
-  retval = log_syscall("lstat", lstat(abspath, stbuf), 0);
-  log_msg("lstat for abspath \"%s\" returned \"%d\"\n",abspath,retval);
-  
- return retval;   
+  search_result = search(path);
+  if(search_result != NULL){
+    stbuf = search_result->metadata;
+  }
+  log_msg("lstat for path \"%s\" returned \"%d\"\n",abspath,retval);
+  return retval;   
 }
 
 /** Read the target of a symbolic link
@@ -85,14 +149,46 @@ int nphfuse_mknod(const char *path, mode_t mode, dev_t dev)
 int nphfuse_mkdir(const char *path, mode_t mode)
 {
   int retval = 1;
-  char abspath[PATH_MAX];
+  int fs_bmoffset = 0;
+  char *filename;
+  char *parent_path;
+  struct nphfs_file *search_result,*parent;
+  struct fuse_context *context;
   if (path == NULL){
     log_msg("ENOENT for path in getattr");
     return -ENOENT;
   }
-  nphfuse_abspath(abspath,path);
-  retval = mkdir(abspath,mode);
-  log_msg("mkdir for abspath \"%s\" with mode \"%o\"returned \"%d\"\n",abspath,mode,retval);
+  search_result = search(path);
+  if (search_result != NULL){
+    log_msg("Cannot create \"%s\" : F/D already exists",path);
+    return -1;
+  }
+  filename = split_path(path);
+  strncpy(parent_path, path, strlen(path)-strlen(filename));
+  parent = search(parent_path);
+  if (parent == NULL){
+    log_msg("Cannot create \"%s\" : Parent not found for \"%s\"",path,parent_path);
+    return -1;
+  }
+  fs_bmoffset=search_bitmap(0);
+  log_msg("Creating new node for \"%s\" with parent \"%s\"",path,parent_path);
+  struct npfhs_file *newnode = npheap_alloc(NPHFS_DATA->devfd,fs_bmoffset,8192);
+  initialize_newnode(newnode);
+  strcpy(newnode->path,path);
+  strcpy(newnode->parent_path,parent_path);
+  //Not changing data offset since this is a directory.
+  context = fuse_get_context() ;
+  newnode->metadata.st_mode = mode & ~context->umask & 0777; 
+  newnode->metadata.st_nlink = 1;
+  newnode->metadata.st_uid = context->uid;
+  newnode->metadata.st_gid = context->gid;
+  newnode->metadata.st_atim = (time_t)time(NULL);
+  newnode->metadata.st_mtim = (time_t)time(NULL);
+  newnode->metadata.st_ctim = (time_t)time(NULL);
+  //fdflag = 1 for directories
+  newnode->fdflag = 1; 
+  strcpy(newnode->filename,filename);
+  log_msg("mkdir for path \"%s\" with mode \"%o\"returned \"%d\"\n",path,mode,retval);
   return retval;
 }
 
