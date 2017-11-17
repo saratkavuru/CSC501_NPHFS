@@ -32,15 +32,16 @@
  * mount option is given.
  */
 //Reserving offsets 0 and 1 for bitmaps
-bool *fsbitmap = npheap_alloc(NPHFS_DATA -> devfd,0,8192);
-bool *dbitmap = npheap_alloc(NPHFS_DATA -> devfd,1,8192);
+bool *fsbitmap ;
+bool *dbitmap ;
 
 struct nphfs_file* search(const char *path){
   int i = 2 ;
- bool *temp = fsbitmap + 2;
+ bool *temp ;
+ temp = fsbitmap + 2;
  struct nphfs_file *search_result;
  while(i < 8192){
- if (&temp){
+ if (*temp){
   search_result = npheap_alloc(NPHFS_DATA -> devfd,i,8192);
   if(strcmp(search_result -> path,path)==0){
     return search_result ; 
@@ -55,13 +56,15 @@ struct nphfs_file* search(const char *path){
 int set_bitmap(int flag,int offset,bool value){
 //flag is 0 for fs and 1 for data bitmaps
 if(!flag){
-  bool *temp = fsbitmap + 2 + offset;
-  &temp = value;
+  bool *temp;
+  temp = fsbitmap + 2 + offset;
+  *temp = value;
   return 0;
 }
 else{
-  bool *temp = dbitmap + offset - 8192;
-  &temp = value;
+  bool *temp;
+  temp = dbitmap + offset - 8192;
+  *temp = value;
   return 0;
 }
 return 1;
@@ -69,13 +72,14 @@ return 1;
 
 int search_bitmap(int flag){
 //flag is 0 for fs and 1 for data bitmaps
-int i; 
+int i;
+bool *temp; 
 if(!flag){
-  bool *temp = fsbitmap + 2;
+  temp = fsbitmap + 2;
   i=2;
 }
 else{
-  bool *temp = dbitmap;
+  temp = dbitmap;
   i=8192;
 }
 while(temp){ 
@@ -85,16 +89,16 @@ while(temp){
 return i;
 }
 
-char* split_path(const char *path){
-char *p =strrchr(path,'/');
 // Returns /filename. So, we have to remove / for filename and remove length
 // of this from path.
+char* split_path(const char *path){
+ char *p =strrchr(path,'/');
 return p;
 }
 
 void initialize_newnode(struct nphfs_file *node){
   strcpy(node->path,"0");
-  strcpy(node->parent_path,"0");
+  strcpy(node->parent_path,"/");
   node->data_offset = -1;
   memset(&node->metadata,0,sizeof(struct stat));
   node->fdflag = -1;
@@ -107,12 +111,22 @@ int nphfuse_getattr(const char *path, struct stat *stbuf)
   int retval = 1;
   struct nphfs_file *search_result;
   if (path == NULL){
-    log_msg("ENOENT for path in getattr");
+    log_msg("ENOENT for path in getattr\n");
     return -ENOENT;
+  }
+  if(strcmp(path,"/") == 0){
+    memset(stbuf,0,sizeof(struct stat));
+    //stbuf->nlink
+
+
   }
   search_result = search(path);
   if(search_result != NULL){
     stbuf = &search_result->metadata;
+  }
+  else{
+    log_msg("getattr for path \"%s\" not found\n",path);
+    return -1;
   }
   log_msg("getattr for path \"%s\" returned \"%d\"\n",path,retval);
   return retval;   
@@ -553,7 +567,9 @@ void *nphfuse_init(struct fuse_conn_info *conn)
     log_msg("\nnphfuse_init()\n");
     log_conn(conn);
     log_fuse_context(fuse_get_context());
-        
+    fsbitmap = npheap_alloc(NPHFS_DATA -> devfd,0,8192);
+    dbitmap = npheap_alloc(NPHFS_DATA -> devfd,1,8192);
+
     return NPHFS_DATA;
 }
 
