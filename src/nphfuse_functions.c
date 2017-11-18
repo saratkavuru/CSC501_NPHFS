@@ -41,7 +41,9 @@ struct nphfs_file* search(const char *path){
  temp = fsbitmap + 2;
  struct nphfs_file *search_result;
  while(i < 8192){
+  //log_msg("i=\"%d %d\"\n",i,*temp);
  if (*temp){
+  log_msg("Searching offset \"%d\"\n",i);
   search_result = npheap_alloc(NPHFS_DATA -> devfd,i,8192);
   if(strcmp(search_result -> path,path)==0){
     return search_result ; 
@@ -56,8 +58,11 @@ struct nphfs_file* search(const char *path){
 int set_bitmap(int flag,int offset,bool value){
 //flag is 0 for fs and 1 for data bitmaps
 if(!flag){
+  log_msg("line 59\n");
   bool *temp;
-  temp = fsbitmap + 2 + offset;
+  log_msg("Line 61\n");
+  temp = fsbitmap + offset;
+  log_msg("line 62\n");
   *temp = value;
   return 0;
 }
@@ -86,6 +91,10 @@ while(temp){
  i++;
  temp++; 
 }
+if(i>((flag+1)*8191))
+{ 
+  return -1;
+}
 return i;
 }
 
@@ -99,6 +108,7 @@ return p;
 void initialize_newnode(struct nphfs_file *node){
   strcpy(node->path,"0");
   strcpy(node->parent_path,"/");
+  node->fs_offset=-1;
   node->data_offset = -1;
   memset(&node->metadata,0,sizeof(struct stat));
   node->fdflag = -1;
@@ -108,21 +118,19 @@ void initialize_newnode(struct nphfs_file *node){
 
 int nphfuse_getattr(const char *path, struct stat *stbuf)
 {
-  int retval = 1;
+  int retval = 0;
   struct nphfs_file *search_result;
   if (path == NULL){
     log_msg("ENOENT for path in getattr\n");
     return -ENOENT;
   }
-  if(strcmp(path,"/") == 0){
-    memset(stbuf,0,sizeof(struct stat));
-    //stbuf->nlink
-
-
-  }
+  
   search_result = search(path);
+  log_msg("line127\n");
+  log_msg("search for path \"%s\" of length \"%d\" returned \"%s\"  \n",path,strlen(path),search_result->path);
   if(search_result != NULL){
     stbuf = &search_result->metadata;
+    log_msg("getattr for path \"%s\" found\n",path);
   }
   else{
     log_msg("getattr for path \"%s\" not found\n",path);
@@ -195,6 +203,7 @@ int nphfuse_mkdir(const char *path, mode_t mode)
   initialize_newnode(newnode);
   strcpy(newnode->path,path);
   strcpy(newnode->parent_path,parent_path);
+  newnode->data_offset = fs_bmoffset;
   //Not changing data offset since this is a directory.
   newnode->metadata.st_nlink = 1;
   //Should increment numlink in parent.
@@ -564,13 +573,37 @@ int nphfuse_fgetattr(const char *path, struct stat *statbuf, struct fuse_file_in
 
 void *nphfuse_init(struct fuse_conn_info *conn)
 {
-    log_msg("\nnphfuse_init()\n");
-    log_conn(conn);
-    log_fuse_context(fuse_get_context());
-    fsbitmap = npheap_alloc(NPHFS_DATA -> devfd,0,8192);
-    dbitmap = npheap_alloc(NPHFS_DATA -> devfd,1,8192);
-
-    return NPHFS_DATA;
+  log_msg("\nnphfuse_init()\n");
+  log_conn(conn);
+  log_fuse_context(fuse_get_context());
+  fsbitmap = npheap_alloc(NPHFS_DATA -> devfd,0,8192);
+  dbitmap = npheap_alloc(NPHFS_DATA -> devfd,1,8192);
+  log_msg("Line 574\n");
+  if(!set_bitmap(0,2,true)){
+    log_msg("Root created with path \n");
+  }
+  struct nphfs_file *root = npheap_alloc(NPHFS_DATA -> devfd,2,8192);
+  struct nphfs_file *search_result;
+  log_msg("Line 579\n");
+  initialize_newnode(root);
+  log_msg("Line 581\n");
+  root->fs_offset = 2;
+  root->metadata.st_mode = S_IFDIR | 0755; 
+  root->metadata.st_nlink = 1;
+  root->metadata.st_uid = getuid();
+  root->metadata.st_gid = getgid();
+  root->metadata.st_atime = (time_t)time(NULL);
+  root->metadata.st_mtime = (time_t)time(NULL);
+  root->metadata.st_ctime = (time_t)time(NULL);
+  log_msg("Line 590\n");
+  //fdflag = 1 for directories
+  root->fdflag = 1; 
+  strcpy(root->path,"/");
+  strcpy(root->filename,"root");
+  log_msg("Root path \"%s\" and size \"%d\"\n",root->path,strlen(root->path));
+  search_result = search(root->path);
+  log_msg("Searched \"%s\" of length \"%d\" and got \"%s\" of length \"%d\"\n",root->path,strlen(root->path),search_result->path,strlen(search_result->path));
+  return NPHFS_DATA;
 }
 
 /**
