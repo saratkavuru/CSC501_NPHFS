@@ -249,6 +249,10 @@ int nphfuse_mknod(const char *path, mode_t mode, dev_t dev)
     log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",path,parent_path);
     return -1;
   }
+  if((parent != NULL) && (!parent->fdflag)){
+    log_msg("Cannot create \"%s\" : Parent  \"%s\" is not a directory\n",path,parent_path);
+    return -1;
+  }
   fs_bmoffset = search_bitmap(0);
   d_bmoffset = search_bitmap(1);
   log_msg("Creating new node for \"%s\" with parent \"%s\"\n",path,parent_path);
@@ -305,6 +309,10 @@ int nphfuse_mkdir(const char *path, mode_t mode)
   parent = search(parent_path);
   if (parent == NULL){
     log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",path,parent_path);
+    return -1;
+  }
+  if((parent != NULL) && (!parent->fdflag)){
+    log_msg("Cannot create \"%s\" : Parent  \"%s\" is not a directory\n",path,parent_path);
     return -1;
   }
   fs_bmoffset = search_bitmap(0);
@@ -450,6 +458,10 @@ int nphfuse_symlink(const char *path, const char *link)
     log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",path,parent_path);
     return -1;
   }
+  if((parent != NULL) && (!parent->fdflag)){
+    log_msg("Cannot create \"%s\" : Parent  \"%s\" is not a directory\n",path,parent_path);
+    return -1;
+  }
   fs_bmoffset = search_bitmap(0);
   d_bmoffset = search_bitmap(1);
   log_msg("Creating new node for \"%s\" with parent \"%s\"\n",path,parent_path);
@@ -501,11 +513,19 @@ int nphfuse_rename(const char *path, const char *newpath)
            //Updating path,parent and filename of the file
            char *filename = split_path(newpath);
            strncpy(parent_path, newpath, strlen(newpath)-strlen(filename));
+           new_parent = search(parent_path);
+           if (new_parent == NULL){
+             log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",newpath,parent_path);
+             return -1;
+            }
+           if((new_parent != NULL) && (!new_parent->fdflag)){
+             log_msg("Cannot create \"%s\" : Parent  \"%s\" is not a directory\n",newpath,parent_path);
+             return -1;
+            }
            strcpy(search_result->filename,filename);
            strcpy(search_result->parent_path,parent_path);
            strcpy(search_result->path,newpath);
            //Updating link counts of old parent and new parent.
-           new_parent = search(parent_path);
            old_parent->metadata.st_nlink --;
            new_parent->metadata.st_nlink ++;
 
@@ -544,7 +564,11 @@ int nphfuse_link(const char *path, const char *newpath)
   strncpy(parent_path, newpath, strlen(newpath)-strlen(filename));
   parent = search(parent_path);
   if (parent == NULL){
-    log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",path,parent_path);
+    log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",newpath,parent_path);
+    return -1;
+  }
+  if((parent != NULL) && (!parent->fdflag)){
+    log_msg("Cannot create \"%s\" : Parent  \"%s\" is not a directory\n",newpath,parent_path);
     return -1;
   }
   fs_bmoffset = search_bitmap(0);
@@ -628,7 +652,35 @@ int nphfuse_chown(const char *path, uid_t uid, gid_t gid)
 int nphfuse_truncate(const char *path, off_t newsize)
 {
    log_msg("In truncate\n");
+   log_msg("In truncate for path \"%s\"\n",path);
+   struct nphfs_file *search_result;
+   char *data;
+   int filesize=0;
+  if (path == NULL){
+    log_msg("ENOENT for path in read\n");
     return -ENOENT;
+  }
+  search_result = search(path);
+  log_msg("search for path \"%s\" of length \"%d\" returned \"%s\" with fdflag \"%d\" \n",path,strlen(path),search_result->path,search_result->fdflag);
+  if(search_result != NULL){
+    filesize = search_result->metadata.st_size;
+    data = npheap_alloc(NPHFS_DATA->devfd,search_result->data_offset,8192);
+    log_msg("Truncate for oldsize \"%d\" and size \"%d\"\n",filesize,newsize); 
+    if(filesize > newsize){
+      memset(data+newsize,'\0',8192-newsize);
+      search_result->metadata.st_size = newsize;
+      log_msg("Truncated data for  \"%s\" of size \"%d\"\n",path,newsize);
+      return 0;  
+    }
+    else {
+      memset(data+filesize,'\0',8192-filesize);
+      search_result->metadata.st_size = newsize;
+      log_msg("filesize < newsize  \"%d\" \n",path);
+      return 0;
+    }
+  }
+    log_msg("File not found for  \"%s\" \n",path);
+    return -1;
 }
 
 /** Change the access and/or modification times of a file */
@@ -772,7 +824,7 @@ int nphfuse_write(const char *path, const char *buf, size_t size, off_t offset,
     data = npheap_alloc(NPHFS_DATA->devfd,search_result->data_offset,8192);
     data = data + offset;
     log_msg("Write for offset \"%d\" and size \"%d\" and filesize\"%d\"\n",offset,size,filesize); 
-    if(filesize - offset+size < 8191){
+    if(filesize - offset+size < 8192){
       memcpy(data,buf,size);
       search_result->metadata.st_size += size;
       log_msg("Copied data for  \"%s\" of size \"%d\"\n",path,size);
@@ -796,9 +848,38 @@ int nphfuse_write(const char *path, const char *buf, size_t size, off_t offset,
  */
 int nphfuse_statfs(const char *path, struct statvfs *statv)
 {
-    log_msg("In statfs\n");
-    return -1;
+  log_msg("In statfs\n");
+  int i=0;
+  int cnt=0;
+  bool *temp =  dbitmap;
+  statv->f_bsize =8192;
+  statv->f_blocks = 8192;
+  while(i<8192)
+  {
+    if(*temp)
+     cnt++;
+   i++;
+   temp++;
+ }
+ statv->f_bfree = 8192-cnt  ;
+ statv->f_bavail = 8192-cnt ;
+ cnt=0;
+ i = 2;
+ temp =  fsbitmap + 2;
+ while(i<8192)
+ {
+  if(*temp)
+   cnt++;
+ i++;
+ temp++;
+} 
+statv->f_files = 8190;    
+statv->f_ffree = 8190 - cnt;    
+statv->f_namemax = 250; 
+return 0; 
 }
+
+
 
 /** Possibly flush cached data
  *
@@ -1059,8 +1140,11 @@ int nphfuse_access(const char *path, int mask)
  */
 int nphfuse_ftruncate(const char *path, off_t offset, struct fuse_file_info *fi)
 {
-    log_msg("In ftruncate\n");
-    return -1;
+    log_msg("In ftruncate for path \n");
+    int retval = 1;
+    retval = nphfuse_truncate(path,offset); 
+    log_msg("Ftruncate for path \"%s\" returned \"%d\"\n",path,retval);
+    return retval;
 }
 
 /**
