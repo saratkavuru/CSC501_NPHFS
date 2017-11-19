@@ -41,7 +41,7 @@ struct nphfs_file* search(const char *path){
  temp = fsbitmap + 2;
  struct nphfs_file *search_result;
  while(i < 8192){
-  //log_msg("i=\"%d %d\"\n",i,*temp);
+ //log_msg("i=\"%d %d\"\n",i,*temp);
  if (*temp){
   log_msg("Searching offset \"%d\"\n",i);
   search_result = npheap_alloc(NPHFS_DATA -> devfd,i,8192);
@@ -1191,7 +1191,7 @@ void *nphfuse_init(struct fuse_conn_info *conn)
   log_msg("Line 574\n");
   if(!set_bitmap(0,2,true)){
     log_msg("Root created with path \n");
-  }
+  } 
   struct nphfs_file *root = npheap_alloc(NPHFS_DATA -> devfd,2,8192);
   struct nphfs_file *search_result;
   log_msg("Line 579\n");
@@ -1214,7 +1214,8 @@ void *nphfuse_init(struct fuse_conn_info *conn)
   log_msg("Root path \"%s\" and fdflag \"%d\"\n",root->path,root->fdflag);
   log_msg("Finalised root \"%s\" with fdflag  \"%d\" and filename  \"%s\" and fs_offset \"%d\" and parent_path \"%s\"\n ",root->path,root->fdflag,root->filename,root->fs_offset,root->parent_path);
   search_result = search(root->path);
-  log_msg("Search result is  \"%s\" with fdflag  \"%d\" and filename  \"%s\" and fs_offset \"%d\" and parent_path \"%s\"\n ",search_result->path,search_result->fdflag,search_result->filename,search_result->fs_offset,search_result->parent_path);  return NPHFS_DATA;
+  log_msg("Search result is  \"%s\" with fdflag  \"%d\" and filename  \"%s\" and fs_offset \"%d\" and parent_path \"%s\"\n ",search_result->path,search_result->fdflag,search_result->filename,search_result->fs_offset,search_result->parent_path);  
+  return NPHFS_DATA;
 }
 
 /**
