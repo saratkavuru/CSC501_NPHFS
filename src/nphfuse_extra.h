@@ -19,6 +19,7 @@ struct nphfs_file {
 	//int p_inode;
 	char path[PATH_MAX];
 	char parent_path[PATH_MAX];
+	char symlink_path[PATH_MAX];
 	int fs_offset;
 	int pin_count;
 	int data_offset;

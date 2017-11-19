@@ -66,7 +66,7 @@ void update_links(int data_offset,int flag){
  if (*temp){
   node = npheap_alloc(NPHFS_DATA -> devfd,i,8192);
   if(node->data_offset == data_offset){
-    log_msg("update file \"%s\"\n",node->filename);
+    log_msg("update link for file \"%s\"\n",node->filename);
     node->metadata.st_nlink += flag;
   }
  }
@@ -74,6 +74,25 @@ void update_links(int data_offset,int flag){
   temp++;
  }
 } 
+
+void update_metada(int data_offset,struct stat metadata){
+  int i = 2 ;
+ bool *temp ;
+ temp = fsbitmap + 2;
+ struct nphfs_file *node;
+ while(i < 8192){
+  //log_msg("i=\"%d %d\"\n",i,*temp);
+ if (*temp){
+  node = npheap_alloc(NPHFS_DATA -> devfd,i,8192);
+  if(node->data_offset == data_offset){
+    log_msg("update metadata for file \"%s\"\n",node->filename);
+    node->metadata = metadata;
+  }
+ }
+  i++;
+  temp++;
+ }
+}
 
 int set_bitmap(int flag,int offset,bool value){
 //flag is 0 for fs and 1 for data bitmaps
@@ -107,12 +126,13 @@ else{
   temp = dbitmap;
   i=8192;
 }
-while(temp){ 
+while(*temp){ 
  i++;
  temp++; 
 }
 if(i>((flag+1)*8191))
 { 
+  log_msg("Search bitmap returned -1\n");
   return -1;
 }
 return i;
@@ -128,6 +148,7 @@ return p;
 void initialize_newnode(struct nphfs_file *node){
   strcpy(node->path,"0");
   strcpy(node->parent_path,"/");
+  strcpy(node->symlink_path,"0");
   node->fs_offset=-1;
   node->data_offset = -1;
   node->pin_count = 0;
@@ -176,6 +197,22 @@ int nphfuse_getattr(const char *path, struct stat *stbuf)
 int nphfuse_readlink(const char *path, char *link, size_t size)
 {
     log_msg("In Readlink\n");
+    char *filename;
+    struct nphfs_file *search_result;
+  if (path == NULL){
+    log_msg("ENOENT for path in chown\n");
+    return -ENOENT;
+  }
+  
+  search_result = search(path);
+  log_msg("search for path \"%s\" of length \"%d\" returned \"%s\"  \n",path,strlen(path),search_result->path);
+  if(search_result != NULL){
+    filename = split_path(search_result -> symlink_path);
+    strncpy(link,filename,size); 
+    log_msg("Read link  \"%s\" is \"%s\"\n",link,filename);
+    return 0;
+  }
+    log_msg("readlink returns -1 for  \"%s\" \n",path);
     return -1;
 }
 
@@ -193,7 +230,7 @@ int nphfuse_mknod(const char *path, mode_t mode, dev_t dev)
 /** Create a directory */
 int nphfuse_mkdir(const char *path, mode_t mode)
 {
-  int retval = 1;
+  int retval = 0;
   int res = 0;
   int fs_bmoffset = 0;
   char *filename;
@@ -226,7 +263,7 @@ int nphfuse_mkdir(const char *path, mode_t mode)
   initialize_newnode(newnode);
   strcpy(newnode->path,path);
   strcpy(newnode->parent_path,parent_path);
-  newnode->data_offset = fs_bmoffset;
+  newnode->fs_offset = fs_bmoffset;
   //Not changing data offset since this is a directory.
   newnode->metadata.st_nlink = 2;
   //Should increment numlink in parent.
@@ -332,9 +369,66 @@ return retval;
 // unaltered, but insert the link into the mounted directory.
 int nphfuse_symlink(const char *path, const char *link)
 {
-    log_msg("In symlink\n");
+  log_msg("In symbolic link\n");
+  int fsretval;
+  int dretval;
+  int fs_bmoffset;
+  int d_bmoffset;
+  char *filename;
+  char *parent_path;
+  struct fuse_context *context;
+  struct nphfs_file *parent;
+  struct nphfs_file *oldfile = search(path);
+  struct nphfs_file *newfile = search(link);
+  if(oldfile == NULL){
+    log_msg("\"%s\" : No such file or directory \n",path);
+    return -1; 
+  }
+  if(newfile != NULL){
+    log_msg("\"%s\" : File already exists \n",path);
+    return -1; 
+  }
+    //Create a new file and copy the data_offset and metadata.
+  filename = split_path(link);
+  strncpy(parent_path, link, strlen(link)-strlen(filename));
+  parent = search(parent_path);
+  if (parent == NULL){
+    log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",path,parent_path);
     return -1;
+  }
+  fs_bmoffset = search_bitmap(0);
+  d_bmoffset = search_bitmap(1);
+  log_msg("Creating new node for \"%s\" with parent \"%s\"\n",path,parent_path);
+  newfile = npheap_alloc(NPHFS_DATA->devfd,fs_bmoffset,8192);
+  fsretval = set_bitmap(0,fs_bmoffset,true);
+  dretval = set_bitmap(0,d_bmoffset,true);
+  log_msg("Return values for bitmaps d - \"%d\" and f -  \"%d\" \n",dretval,fsretval);
+  initialize_newnode(newfile);
+  strcpy(newfile->path,link);
+  strcpy(newfile->parent_path,parent_path);
+ newfile->fs_offset = fs_bmoffset;
+ //Changing data offset to that of oldfile to make it a symlink.
+ newfile->data_offset = d_bmoffset;
+ //Symlink_path should be updated to differentiate between hard and soft links.
+ strcpy(newfile->symlink_path,path);
+ newfile->metadata.st_nlink = 1;
+ //Should increment numlink in parent.
+ parent->metadata.st_nlink ++;
+ context = fuse_get_context();
+ newfile->metadata.st_mode = S_IFREG | 0777; 
+ newfile->metadata.st_uid = context->uid;
+ newfile->metadata.st_gid = context->gid;
+ newfile->metadata.st_atime = (time_t)time(NULL);
+ newfile->metadata.st_mtime = (time_t)time(NULL);
+ newfile->metadata.st_ctime = (time_t)time(NULL);
+  //fdflag = 0 for files
+ newfile->fdflag = 0; 
+ strcpy(newfile->filename,filename);
+ log_msg("Link for path \"%s\" with has filename \"%s\"\n",link,newfile->filename);
+ //Make the link 
+ return 0;
 }
+
 
 /** Rename a file */
 // both path and newpath are fs-relative
@@ -371,51 +465,145 @@ int nphfuse_rename(const char *path, const char *newpath)
 /** Create a hard link to a file */
 int nphfuse_link(const char *path, const char *newpath)
 {
-    log_msg("In link\n");
-    struct nphfs_file *oldfile = search(path);
-    struct nphfs_file *newfile = search(newpath);
-    if(oldfile == NULL){
-      log_msg("\"%s\" : No such file or directory \n",path);
-      return -1; 
-    }
-    if(newfile == NULL){
-      log_msg("\"%s\" : File already exists \n",path);
-      return -1; 
-    }
-    //Create a new file should be handled by open()
-    newfile->data_offset = oldfile->data_offset;
-    newfile->metadata = oldfile->metadata;
-    update_links(newfile->data_offset,1);
+  log_msg("In link\n");
+  int fsretval;
+  int dretval;
+  int fs_bmoffset;
+  int d_bmoffset;
+  char *filename;
+  char *parent_path;
+  //struct fuse_context *context;
+  struct nphfs_file *parent;
+  struct nphfs_file *oldfile = search(path);
+  struct nphfs_file *newfile = search(newpath);
+  if(oldfile == NULL){
+    log_msg("\"%s\" : No such file or directory \n",path);
+    return -1; 
+  }
+  if(newfile != NULL){
+    log_msg("\"%s\" : File already exists \n",newpath);
+    return -1; 
+  }
+    //Create a new file and copy the data_offset and metadata.
+  filename = split_path(newpath);
+  strncpy(parent_path, newpath, strlen(newpath)-strlen(filename));
+  parent = search(parent_path);
+  if (parent == NULL){
+    log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",path,parent_path);
+    return -1;
+  }
+  fs_bmoffset = search_bitmap(0);
+  d_bmoffset = search_bitmap(1);
+  log_msg("Creating new node for \"%s\" with parent \"%s\"\n",path,parent_path);
+  newfile = npheap_alloc(NPHFS_DATA->devfd,fs_bmoffset,8192);
+  fsretval = set_bitmap(0,fs_bmoffset,true);
+  dretval = set_bitmap(0,d_bmoffset,true);
+  log_msg("Return values for bitmaps d - \"%d\" and f -  \"%d\" \n",dretval,fsretval);
+ initialize_newnode(newfile);
+ strcpy(newfile->path,newpath);
+ strcpy(newfile->parent_path,parent_path);
+ newfile->fs_offset = fs_bmoffset;
+ newfile->data_offset = d_bmoffset;
+ //Changing data offset since this is a file.
+ //Not updating link =1 since update_links will handle it. 
+ //newnode->metadata.st_nlink = 1;
+ //Should increment numlink in parent.
+ parent->metadata.st_nlink ++;
+  //fdflag = 0 for files
+ newfile->fdflag = 0; 
+ strcpy(newfile->filename,filename);
+ log_msg("Link for path \"%s\" with has filename \"%s\"\n",newpath,newfile->filename);
+ //Make the link and update link counts
+ newfile->data_offset = oldfile->data_offset;
+ newfile->metadata = oldfile->metadata;
+ update_links(newfile->data_offset,1);
 
-    return 0;
+ return 0;
 }
 
 /** Change the permission bits of a file */
 int nphfuse_chmod(const char *path, mode_t mode)
 {
-   log_msg("In nphfuse_chmod\n");
+  log_msg("In nphfuse_chmod\n");
+  struct nphfs_file *search_result;
+  if (path == NULL){
+    log_msg("ENOENT for path in chmod\n");
     return -ENOENT;
+  }
+  
+  search_result = search(path);
+  log_msg("search for path \"%s\" of length \"%d\" returned \"%s\"  \n",path,strlen(path),search_result->path);
+  if(search_result != NULL){
+    search_result->metadata.st_mode = mode;
+    log_msg("Changed mode for  \"%s\" \n",path);
+    search_result->metadata.st_ctime = (time_t)time(NULL);
+    update_metada(search_result->data_offset,search_result->metadata);
+    return 0;
+  }
+    log_msg("Chmod returns -1 for  \"%s\" \n",path);
+    return -1;
 }
 
 /** Change the owner and group of a file */
 int nphfuse_chown(const char *path, uid_t uid, gid_t gid)
 {
-    log_msg("In chown\n");
+  log_msg("In chown\n");
+  struct nphfs_file *search_result;
+  if (path == NULL){
+    log_msg("ENOENT for path in chown\n");
     return -ENOENT;
+  }
+  
+  search_result = search(path);
+  log_msg("search for path \"%s\" of length \"%d\" returned \"%s\"  \n",path,strlen(path),search_result->path);
+  if(search_result != NULL){
+    search_result->metadata.st_uid = uid;
+    search_result->metadata.st_gid = gid;
+    log_msg("Changed ownership for  \"%s\" \n",path);
+    search_result->metadata.st_ctime = (time_t)time(NULL);
+    update_metada(search_result->data_offset,search_result->metadata);
+    return 0;
+  }
+    log_msg("Chmod returns -1 for  \"%s\" \n",path);
+    return -1;
 }
+
 
 /** Change the size of a file */
 int nphfuse_truncate(const char *path, off_t newsize)
 {
-   log_msg("In truncatek\n");
+   log_msg("In truncate\n");
     return -ENOENT;
 }
 
 /** Change the access and/or modification times of a file */
 int nphfuse_utime(const char *path, struct utimbuf *ubuf)
 {
-     log_msg("In nphfuse_utime\n");
-     return -ENOENT;
+  log_msg("In utime\n");
+  struct nphfs_file *search_result;
+  if (path == NULL){
+    log_msg("ENOENT for path in utime\n");
+    return -ENOENT;
+  }
+  
+  search_result = search(path);
+  log_msg("search for path \"%s\" of length \"%d\" returned \"%s\"  \n",path,strlen(path),search_result->path);
+  if(search_result != NULL){
+    if(ubuf != NULL){
+     search_result->metadata.st_atime = ubuf->actime;
+     search_result->metadata.st_mtime = ubuf->modtime; 
+    }
+    else{
+     search_result->metadata.st_atime = (time_t)time(NULL);
+     search_result->metadata.st_mtime = (time_t)time(NULL); 
+    }
+    search_result->metadata.st_ctime = (time_t)time(NULL);
+    log_msg("Changed utime for  \"%s\" \n",path);
+    update_metada(search_result->data_offset,search_result->metadata);
+    return 0;
+  }
+    log_msg("utime returns -1 for  \"%s\" \n",path);
+    return -1;
 }
 
 /** File open operation
@@ -594,11 +782,19 @@ int nphfuse_removexattr(const char *path, const char *name)
 int nphfuse_opendir(const char *path, struct fuse_file_info *fi)
 {
    log_msg("In opendir\n");
+   struct nphfs_file *search_result;
   if (path == NULL){
     log_msg("ENOENT for path \"%s\" in opendir\n",path);
     return -ENOENT;
   }
- return 0;
+  search_result = search(path);
+  if(search_result != NULL){
+    search_result->pin_count++;
+    log_msg("Search result is  \"%s\" with fdflag  \"%s\"\n ",search_result->path,search_result->fdflag);
+    return 0;
+  }
+ log_msg("directory \"%s\" doesn't exist\n ",path);
+ return -1;
 }
 
 /** Read directory
@@ -666,18 +862,18 @@ int nphfuse_releasedir(const char *path, struct fuse_file_info *fi)
 {
   log_msg("In Releasedir\n");
   struct nphfs_file *search_result;
-    search_result = search(path);
-    if (search_result == NULL){
-    log_msg("ENOENT for path in Releasedir\n");
+  if (path == NULL){
+    log_msg("ENOENT for path \"%s\" in Releasedir\n",path);
     return -ENOENT;
   }
-  else{
-      log_msg("Search result path is \"%s\"\n",search_result->path);
+  search_result = search(path);
+  if(search_result != NULL){
+    search_result->pin_count--;
+    log_msg("Search result is  \"%s\" with fdflag  \"%s\"\n ",search_result->path,search_result->fdflag);
+    return 0;
   }
-
-    log_msg("Exiting Releasedir\n");
-
-  return 0;
+ log_msg("directory \"%s\" doesn't exist\n ",path);
+ return -1;
 }
 
 /** Synchronize directory contents
