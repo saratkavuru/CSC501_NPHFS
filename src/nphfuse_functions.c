@@ -211,7 +211,7 @@ int nphfuse_readlink(const char *path, char *link, size_t size)
     filename = split_path(search_result -> symlink_path);
     strcpy(link,filename); 
     log_msg("Read link  \"%s\" is \"%s\"\n",link,filename);
-    return strlen(filename);
+    return 0;
   }
     log_msg("readlink returns -1 for  \"%s\" \n",path);
     return -1;
@@ -268,7 +268,7 @@ int nphfuse_mknod(const char *path, mode_t mode, dev_t dev)
  parent->metadata.st_nlink ++;
  context = fuse_get_context();
  newfile->metadata.st_dev = dev;
- newfile->metadata.st_mode = mode & ~(context->umask) & 0777; 
+ newfile->metadata.st_mode = mode|S_IFREG; 
  newfile->metadata.st_uid = context->uid;
  newfile->metadata.st_gid = context->gid;
  newfile->metadata.st_atime = (time_t)time(NULL);
@@ -324,7 +324,7 @@ int nphfuse_mkdir(const char *path, mode_t mode)
   //Should increment numlink in parent.
   parent->metadata.st_nlink ++;
   context = fuse_get_context() ;
-  newnode->metadata.st_mode = mode & ~(context->umask) & 0777; 
+  newnode->metadata.st_mode = mode|S_IFDIR; 
   newnode->metadata.st_uid = context->uid;
   newnode->metadata.st_gid = context->gid;
   newnode->metadata.st_atime = (time_t)time(NULL);
@@ -470,7 +470,7 @@ int nphfuse_symlink(const char *path, const char *link)
  //Should increment numlink in parent.
  parent->metadata.st_nlink ++;
  context = fuse_get_context();
- newfile->metadata.st_mode = S_IFREG | 0777; 
+ newfile->metadata.st_mode = S_IFLNK | 0777; 
  newfile->metadata.st_uid = context->uid;
  newfile->metadata.st_gid = context->gid;
  newfile->metadata.st_atime = (time_t)time(NULL);
@@ -673,12 +673,25 @@ int nphfuse_utime(const char *path, struct utimbuf *ubuf)
  */
 int nphfuse_open(const char *path, struct fuse_file_info *fi)
 {
-     log_msg("In open\n");
-    if ((fi->flags & O_ACCMODE) != O_RDONLY)
-        return -EACCES;
-
+    log_msg("In open for path \"%s\"\n",path);
+    if ((fi->flags & O_ACCMODE) != O_RDONLY){
+      log_msg("Not sure about this\n");
+      return -EACCES;
+    }
+    struct nphfs_file *search_result;
+  if (path == NULL){
+    log_msg("ENOENT for path in chmod\n");
     return -ENOENT;
-
+  }
+   search_result = search(path);
+  log_msg("search for path \"%s\" of length \"%d\" returned \"%s\"  \n",path,strlen(path),search_result->path);
+  if(search_result != NULL){
+    search_result->pin_count++;
+    log_msg("Changed pin_count for  \"%s\" \n",path);
+    return 0;
+  }
+    log_msg("Open returns -1 for  \"%s\" \n",path);
+    return -1;
 }
 
 /** Read data from an open file
@@ -700,7 +713,9 @@ int nphfuse_open(const char *path, struct fuse_file_info *fi)
 int nphfuse_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
    log_msg("In Read file\n");
-    return -ENOENT;
+   
+
+   return -ENOENT;
 }
 
 /** Write data to an open file
@@ -780,8 +795,21 @@ int nphfuse_flush(const char *path, struct fuse_file_info *fi)
  */
 int nphfuse_release(const char *path, struct fuse_file_info *fi)
 {
-    log_msg("In Release file\n");
+    log_msg("In Release for path \"%s\"\n",path);
+    struct nphfs_file *search_result;
+  if (path == NULL){
+    log_msg("ENOENT for path in chmod\n");
+    return -ENOENT;
+  }
+   search_result = search(path);
+  log_msg("search for path \"%s\" of length \"%d\" returned \"%s\" with fdflag \"%d\" \n",path,strlen(path),search_result->path,search_result->fdflag);
+  if(search_result != NULL){
+    search_result->pin_count--;
+    log_msg("Changed pin_count for  \"%s\" \n",path);
     return 0;
+  }
+    log_msg("Release returns -1 for  \"%s\" \n",path);
+    return -1;
 }
 
 /** Synchronize file contents
@@ -953,7 +981,7 @@ int nphfuse_access(const char *path, int mask)
     search_result = search(path);
     if (search_result == NULL){
     log_msg("ENOENT for path in access\n");
-    return -ENOENT;
+    //return -ENOENT;
   }
   
 
