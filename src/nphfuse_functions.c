@@ -76,7 +76,7 @@ void update_links(int data_offset,int flag){
  }
 } 
 
-void update_metada(int data_offset,struct stat metadata){
+void update_metadata(int data_offset,struct stat metadata){
   int i = 2 ;
  bool *temp ;
  temp = fsbitmap + 2;
@@ -156,7 +156,6 @@ void initialize_newnode(struct nphfs_file *node){
   memset(&node->metadata,0,sizeof(struct stat));
   node->fdflag = -1;
   strcpy(node->filename,"0");
-  node->filesize = 0;
 }
 
 int nphfuse_getattr(const char *path, struct stat *stbuf)
@@ -201,7 +200,7 @@ int nphfuse_readlink(const char *path, char *link, size_t size)
     char *filename;
     struct nphfs_file *search_result;
   if (path == NULL){
-    log_msg("ENOENT for path in chown\n");
+    log_msg("ENOENT for path in readlink\n");
     return -ENOENT;
   }
   
@@ -470,6 +469,7 @@ int nphfuse_symlink(const char *path, const char *link)
  //Should increment numlink in parent.
  parent->metadata.st_nlink ++;
  context = fuse_get_context();
+ newfile->metadata.st_size = strlen(split_path(newfile->symlink_path));
  newfile->metadata.st_mode = S_IFLNK | 0777; 
  newfile->metadata.st_uid = context->uid;
  newfile->metadata.st_gid = context->gid;
@@ -592,7 +592,7 @@ int nphfuse_chmod(const char *path, mode_t mode)
     search_result->metadata.st_mode = mode;
     log_msg("Changed mode for  \"%s\" \n",path);
     search_result->metadata.st_ctime = (time_t)time(NULL);
-    update_metada(search_result->data_offset,search_result->metadata);
+    update_metadata(search_result->data_offset,search_result->metadata);
     return 0;
   }
     log_msg("Chmod returns -1 for  \"%s\" \n",path);
@@ -616,7 +616,7 @@ int nphfuse_chown(const char *path, uid_t uid, gid_t gid)
     search_result->metadata.st_gid = gid;
     log_msg("Changed ownership for  \"%s\" \n",path);
     search_result->metadata.st_ctime = (time_t)time(NULL);
-    update_metada(search_result->data_offset,search_result->metadata);
+    update_metadata(search_result->data_offset,search_result->metadata);
     return 0;
   }
     log_msg("Chmod returns -1 for  \"%s\" \n",path);
@@ -654,7 +654,7 @@ int nphfuse_utime(const char *path, struct utimbuf *ubuf)
     }
     search_result->metadata.st_ctime = (time_t)time(NULL);
     log_msg("Changed utime for  \"%s\" \n",path);
-    update_metada(search_result->data_offset,search_result->metadata);
+    update_metadata(search_result->data_offset,search_result->metadata);
     return 0;
   }
     log_msg("utime returns -1 for  \"%s\" \n",path);
@@ -714,6 +714,7 @@ int nphfuse_read(const char *path, char *buf, size_t size, off_t offset, struct 
 {
    log_msg("In Read for path \"%s\"\n",path);
    int i = 0;
+   int filesize = 0;
    struct nphfs_file *search_result;
    char *data;
   if (path == NULL){
@@ -723,22 +724,23 @@ int nphfuse_read(const char *path, char *buf, size_t size, off_t offset, struct 
   search_result = search(path);
   log_msg("search for path \"%s\" of length \"%d\" returned \"%s\" with fdflag \"%d\" \n",path,strlen(path),search_result->path,search_result->fdflag);
   if(search_result != NULL){
+    filesize = search_result->metadata.st_size;
     data = npheap_alloc(NPHFS_DATA->devfd,search_result->data_offset,8192);
     data = data + offset;
-    log_msg("Read for offset \"%d\" and size \"%d\" and filesize\"%d\"\n",offset,size,search_result->filesize); 
-    if(search_result->filesize > offset+size){
+    log_msg("Read for offset \"%d\" and size \"%d\" and filesize\"%d\"\n",offset,size,filesize); 
+    if(filesize > offset+size){
       memcpy(buf,data,size);
       log_msg("Copied data for  \"%s\" of size \"%d\"\n",path,size);
       return size;  
     }
-    else if (search_result->filesize > offset){
-      memcpy(buf,data,search_result->filesize - offset);
+    else if (filesize > offset){
+      memcpy(buf,data,filesize - offset);
       //memcpy(buf+search_result->filesize - offset,0,size-(search_result->filesize - offset));
-      log_msg("Copied data for  \"%s\" of size \"%d\"\n",path,(search_result->filesize - offset));
-      return search_result->filesize - offset;
+      log_msg("Copied data for  \"%s\" of size \"%d\"\n",path,(filesize - offset));
+      return filesize - offset;
     }
     else {
-      log_msg("Reached EOF for offset \"%d\" and size \"%d\" and filesize\"%d\"\n",offset,size,search_result->filesize);
+      log_msg("Reached EOF for offset \"%d\" and size \"%d\" and filesize\"%d\"\n",offset,size,filesize);
     }
   }
     log_msg("Open returns -1 for  \"%s\" \n",path);
@@ -758,6 +760,7 @@ int nphfuse_write(const char *path, const char *buf, size_t size, off_t offset,
    log_msg("In write for path \"%s\"\n",path);
    struct nphfs_file *search_result;
    char *data;
+   int filesize=0;
   if (path == NULL){
     log_msg("ENOENT for path in read\n");
     return -ENOENT;
@@ -765,16 +768,18 @@ int nphfuse_write(const char *path, const char *buf, size_t size, off_t offset,
   search_result = search(path);
   log_msg("search for path \"%s\" of length \"%d\" returned \"%s\" with fdflag \"%d\" \n",path,strlen(path),search_result->path,search_result->fdflag);
   if(search_result != NULL){
+    filesize = search_result->metadata.st_size;
     data = npheap_alloc(NPHFS_DATA->devfd,search_result->data_offset,8192);
     data = data + offset;
-    log_msg("Write for offset \"%d\" and size \"%d\" and filesize\"%d\"\n",offset,size,search_result->filesize); 
-    if(search_result->filesize - offset+size < 8191){
+    log_msg("Write for offset \"%d\" and size \"%d\" and filesize\"%d\"\n",offset,size,filesize); 
+    if(filesize - offset+size < 8191){
       memcpy(data,buf,size);
+      search_result->metadata.st_size += size;
       log_msg("Copied data for  \"%s\" of size \"%d\"\n",path,size);
       return size;  
     }
     else {
-      log_msg("Reached 8K limit for offset \"%d\" and size \"%d\" and filesize\"%d\"\n",offset,size,search_result->filesize);
+      log_msg("Reached 8K limit for offset \"%d\" and size \"%d\" and filesize\"%d\"\n",offset,size,filesize);
       return -1;
     }
   }

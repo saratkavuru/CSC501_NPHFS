@@ -26,5 +26,4 @@ struct nphfs_file {
 	struct stat metadata;
 	int fdflag;
 	char filename[250];
-	int filesize;
 };
