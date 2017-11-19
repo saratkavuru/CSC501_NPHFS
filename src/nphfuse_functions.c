@@ -1113,19 +1113,33 @@ int nphfuse_fsyncdir(const char *path, int datasync, struct fuse_file_info *fi)
 int nphfuse_access(const char *path, int mask)
 {
     log_msg("In access\n");
-    int r=1;
     struct nphfs_file *search_result;
     search_result = search(path);
     if (search_result == NULL){
     log_msg("ENOENT for path in access\n");
-    //return -ENOENT;
+    return -ENOENT;
   }
-  
-
-    return 0;
-//    return -1;
-}
-
+  if (mask & (1 << 1))
+  {
+    log_msg("looking for r permission \n");
+    if (!search_result->metadata.st_mode & (S_IWUSR | S_IWGRP | S_IWOTH))
+      return -EACCES;
+  }
+  if (mask & (1 << 2))
+  {
+    log_msg("looking for w permission \n");
+    if (!search_result->metadata.st_mode & (S_IRUSR | S_IRGRP | S_IROTH))
+      return -EACCES;
+  }
+  if (mask & 1)
+  {
+    log_msg("looking for x permission \n");
+    if (!search_result->metadata.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))
+      return -EACCES;
+  }
+     log_msg("Access ok  for \"%s\"\n",path);
+     return 0;
+  }
 /**
  * Change the size of an open file
  *
