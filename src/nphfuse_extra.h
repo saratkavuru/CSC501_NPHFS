@@ -17,9 +17,9 @@ struct nphfuse_state {
 struct nphfs_file {
 	//int inode;
 	//int p_inode;
-	char path[512];
-	char parent_path[512];
-	char symlink_path[512];
+	char path[1024];
+	char parent_path[1024];
+	char symlink_path[1024];
 	int fs_offset;
 	int pin_count;
 	int data_offset;
