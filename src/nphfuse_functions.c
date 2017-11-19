@@ -55,6 +55,26 @@ struct nphfs_file* search(const char *path){
  return NULL;
 } 
 
+//Flag is 1 for increment and -1 for decrement
+void update_links(int data_offset,int flag){
+ int i = 2 ;
+ bool *temp ;
+ temp = fsbitmap + 2;
+ struct nphfs_file *node;
+ while(i < 8192){
+  //log_msg("i=\"%d %d\"\n",i,*temp);
+ if (*temp){
+  node = npheap_alloc(NPHFS_DATA -> devfd,i,8192);
+  if(node->data_offset == data_offset){
+    log_msg("update file \"%s\"\n",node->filename);
+    node->metadata.st_nlink += flag;
+  }
+ }
+  i++;
+  temp++;
+ }
+} 
+
 int set_bitmap(int flag,int offset,bool value){
 //flag is 0 for fs and 1 for data bitmaps
 if(!flag){
@@ -110,6 +130,7 @@ void initialize_newnode(struct nphfs_file *node){
   strcpy(node->parent_path,"/");
   node->fs_offset=-1;
   node->data_offset = -1;
+  node->pin_count = 0;
   memset(&node->metadata,0,sizeof(struct stat));
   node->fdflag = -1;
   strcpy(node->filename,"0");
@@ -154,6 +175,7 @@ int nphfuse_getattr(const char *path, struct stat *stbuf)
 // nphfuse_readlink() code by Bernardo F Costa (thanks!)
 int nphfuse_readlink(const char *path, char *link, size_t size)
 {
+    log_msg("In Readlink\n");
     return -1;
 }
 
@@ -164,6 +186,7 @@ int nphfuse_readlink(const char *path, char *link, size_t size)
  */
 int nphfuse_mknod(const char *path, mode_t mode, dev_t dev)
 {
+    log_msg("In mknod\n");
     return -ENOENT;
 }
 
@@ -205,7 +228,7 @@ int nphfuse_mkdir(const char *path, mode_t mode)
   strcpy(newnode->parent_path,parent_path);
   newnode->data_offset = fs_bmoffset;
   //Not changing data offset since this is a directory.
-  newnode->metadata.st_nlink = 1;
+  newnode->metadata.st_nlink = 2;
   //Should increment numlink in parent.
   parent->metadata.st_nlink ++;
   context = fuse_get_context() ;
@@ -225,13 +248,81 @@ int nphfuse_mkdir(const char *path, mode_t mode)
 /** Remove a file */
 int nphfuse_unlink(const char *path)
 {
-    return -1;
+   log_msg("In Unlink\n");
+   int retdval = 1;
+   int retfsval = 1;
+   int ddval,dfsval;
+   struct nphfs_file *search_result;
+        search_result = search(path);
+        if(search_result!= NULL)
+        {     
+          update_links(search_result->data_offset,-1);
+                if(search_result->metadata.st_nlink == 0)
+                {       
+                    if(search_result->pin_count == 0)
+                    {
+                     log_msg("Deleting file \"%s\" with link count \"%d\" \n",search_result->filename,search_result->metadata.st_nlink);
+                     ddval = npheap_delete(NPHFS_DATA->devfd,search_result->data_offset);
+                     retdval = set_bitmap(1,search_result->data_offset,false);
+                     dfsval = npheap_delete(NPHFS_DATA->devfd,search_result->fs_offset);
+                     retfsval = set_bitmap(0,search_result->fs_offset,false);
+                     log_msg("Return values for bitmaps d - \"%d\" and f -  \"%d\" \n",retdval,retfsval);
+                     log_msg("Return values for npheap delete d - \"%d\" and f -  \"%d\" \n",ddval,dfsval);
+                    }
+                    else{
+                      log_msg("Cannot delete: File \"%s\" is in use\n",search_result->filename);
+                      update_links(search_result->data_offset,1);
+                      return -1;
+                    }
+                }
+                else
+                {       
+                      log_msg("Search for path \"%s\" returned null\n",path);
+                      return -1;
+                }
+        }
+   return 0; 
 }
 
 /** Remove a directory */
 int nphfuse_rmdir(const char *path)
 {
+  log_msg("In rmdir\n");
+  int retval = 1;
+  struct nphfs_file *search_result;
+  if (path == NULL){
+    log_msg("ENOENT for path in rmdir\n");
+    return -ENOENT;
+  }
+  search_result = search(path);
+  if (search_result == NULL){
+    log_msg("Directory \"%s\" doesn't exist\n ",path);
     return -1;
+  }
+  if(! search_result->fdflag){
+    log_msg("Failed \"%s\" is a file.\n ",path);
+    return -1;
+  }
+  //Find out whether the directory is empty 
+  int i = 2 ;
+  bool *temp = fsbitmap + 2;
+  struct nphfs_file *node;
+  while(i < 8192){
+   if (*temp){
+    node = npheap_alloc(NPHFS_DATA -> devfd,i,8192);
+    if(strcmp(node->parent_path,path) == 0){
+     log_msg("Directory \"%s\" not empty\n ",path);
+     return -1;
+   }
+ }
+ i++;
+ temp++;
+}
+//Deleting the directory if it's empty.
+retval = npheap_delete(NPHFS_DATA->devfd,search_result->fs_offset);
+set_bitmap(0,search_result->fs_offset,false);
+log_msg("Directory \"%s\" should be deleted and retval is \"%d\" \n ",path,retval);
+return retval;
 }
 
 /** Create a symbolic link */
@@ -241,6 +332,7 @@ int nphfuse_rmdir(const char *path)
 // unaltered, but insert the link into the mounted directory.
 int nphfuse_symlink(const char *path, const char *link)
 {
+    log_msg("In symlink\n");
     return -1;
 }
 
@@ -248,37 +340,82 @@ int nphfuse_symlink(const char *path, const char *link)
 // both path and newpath are fs-relative
 int nphfuse_rename(const char *path, const char *newpath)
 {
+   log_msg("In Rename\n");
+   char *filename;
+   char *parent_path;
+   struct nphfs_file *search_result = search(path);
+   struct nphfs_file *old_parent;
+   struct nphfs_file *new_parent;
+        if(search_result != NULL)
+        {  
+           old_parent = search(search_result->parent_path);
+           //Updating path,parent and filename of the file
+           char *filename = split_path(newpath);
+           strncpy(parent_path, newpath, strlen(newpath)-strlen(filename));
+           strcpy(search_result->filename,filename);
+           strcpy(search_result->parent_path,parent_path);
+           strcpy(search_result->path,newpath);
+           //Updating link counts of old parent and new parent.
+           new_parent = search(parent_path);
+           old_parent->metadata.st_nlink --;
+           new_parent->metadata.st_nlink ++;
+
+           return 0;
+
+        }
+
+    log_msg("Search for path \"%s\" returned null\n",path);  
     return -1;
 }
 
 /** Create a hard link to a file */
 int nphfuse_link(const char *path, const char *newpath)
 {
-    return -1;
+    log_msg("In link\n");
+    struct nphfs_file *oldfile = search(path);
+    struct nphfs_file *newfile = search(newpath);
+    if(oldfile == NULL){
+      log_msg("\"%s\" : No such file or directory \n",path);
+      return -1; 
+    }
+    if(newfile == NULL){
+      log_msg("\"%s\" : File already exists \n",path);
+      return -1; 
+    }
+    //Create a new file should be handled by open()
+    newfile->data_offset = oldfile->data_offset;
+    newfile->metadata = oldfile->metadata;
+    update_links(newfile->data_offset,1);
+
+    return 0;
 }
 
 /** Change the permission bits of a file */
 int nphfuse_chmod(const char *path, mode_t mode)
 {
-        return -ENOENT;
+   log_msg("In nphfuse_chmod\n");
+    return -ENOENT;
 }
 
 /** Change the owner and group of a file */
 int nphfuse_chown(const char *path, uid_t uid, gid_t gid)
 {
-        return -ENOENT;
+    log_msg("In chown\n");
+    return -ENOENT;
 }
 
 /** Change the size of a file */
 int nphfuse_truncate(const char *path, off_t newsize)
 {
-        return -ENOENT;
+   log_msg("In truncatek\n");
+    return -ENOENT;
 }
 
 /** Change the access and/or modification times of a file */
 int nphfuse_utime(const char *path, struct utimbuf *ubuf)
 {
-        return -ENOENT;
+     log_msg("In nphfuse_utime\n");
+     return -ENOENT;
 }
 
 /** File open operation
@@ -293,6 +430,7 @@ int nphfuse_utime(const char *path, struct utimbuf *ubuf)
  */
 int nphfuse_open(const char *path, struct fuse_file_info *fi)
 {
+     log_msg("In open\n");
     if ((fi->flags & O_ACCMODE) != O_RDONLY)
         return -EACCES;
 
@@ -318,6 +456,7 @@ int nphfuse_open(const char *path, struct fuse_file_info *fi)
 // returned by read.
 int nphfuse_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
+   log_msg("In Read file\n");
     return -ENOENT;
 }
 
@@ -331,6 +470,7 @@ int nphfuse_read(const char *path, char *buf, size_t size, off_t offset, struct 
 int nphfuse_write(const char *path, const char *buf, size_t size, off_t offset,
 	     struct fuse_file_info *fi)
 {
+    log_msg("In write file\n");
     return -ENOENT;
 }
 
@@ -343,6 +483,7 @@ int nphfuse_write(const char *path, const char *buf, size_t size, off_t offset,
  */
 int nphfuse_statfs(const char *path, struct statvfs *statv)
 {
+    log_msg("In statfs\n");
     return -1;
 }
 
@@ -396,6 +537,7 @@ int nphfuse_flush(const char *path, struct fuse_file_info *fi)
  */
 int nphfuse_release(const char *path, struct fuse_file_info *fi)
 {
+    log_msg("In Release file\n");
     return 0;
 }
 
@@ -408,6 +550,7 @@ int nphfuse_release(const char *path, struct fuse_file_info *fi)
  */
 int nphfuse_fsync(const char *path, int datasync, struct fuse_file_info *fi)
 {
+    log_msg("In fsync\n");
     return -1;
 }
 
@@ -415,24 +558,28 @@ int nphfuse_fsync(const char *path, int datasync, struct fuse_file_info *fi)
 /** Set extended attributes */
 int nphfuse_setxattr(const char *path, const char *name, const char *value, size_t size, int flags)
 {
+    log_msg("In nphfuse_setxattr\n"); 
     return -61;
 }
 
 /** Get extended attributes */
 int nphfuse_getxattr(const char *path, const char *name, char *value, size_t size)
 {
+    log_msg("In getxattr\n"); 
     return -61;
 }
 
 /** List extended attributes */
 int nphfuse_listxattr(const char *path, char *list, size_t size)
 {
+    log_msg("In nphfuse_listxattr\n"); 
     return -61;
 }
 
 /** Remove extended attributes */
 int nphfuse_removexattr(const char *path, const char *name)
 {
+    log_msg("In removexattr\n"); 
     return -61;
 }
 #endif
@@ -446,6 +593,7 @@ int nphfuse_removexattr(const char *path, const char *name)
  */
 int nphfuse_opendir(const char *path, struct fuse_file_info *fi)
 {
+   log_msg("In opendir\n");
   if (path == NULL){
     log_msg("ENOENT for path \"%s\" in opendir\n",path);
     return -ENOENT;
@@ -479,6 +627,7 @@ int nphfuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t o
   struct fuse_file_info *fi)
 { 
 
+  log_msg("In Readdir\n");
   struct nphfs_file *search_result;
   
   if (path == NULL){
@@ -494,7 +643,7 @@ int nphfuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t o
   int i = 2 ;
   bool *temp = fsbitmap + 2;
   while(i < 8192){
-   if (&temp){
+   if (*temp){
     search_result = npheap_alloc(NPHFS_DATA -> devfd,i,8192);
     if(strcmp(search_result -> parent_path,path)==0){
      if (!filler(buf,search_result->filename,&search_result->metadata,0)){
@@ -515,7 +664,20 @@ return 0;
  */
 int nphfuse_releasedir(const char *path, struct fuse_file_info *fi)
 {
-    return 0;
+  log_msg("In Releasedir\n");
+  struct nphfs_file *search_result;
+    search_result = search(path);
+    if (search_result == NULL){
+    log_msg("ENOENT for path in Releasedir\n");
+    return -ENOENT;
+  }
+  else{
+      log_msg("Search result path is \"%s\"\n",search_result->path);
+  }
+
+    log_msg("Exiting Releasedir\n");
+
+  return 0;
 }
 
 /** Synchronize directory contents
@@ -529,11 +691,21 @@ int nphfuse_releasedir(const char *path, struct fuse_file_info *fi)
 // happens to be a directory? ??? 
 int nphfuse_fsyncdir(const char *path, int datasync, struct fuse_file_info *fi)
 {
+    log_msg("In fsyncdir\n"); 
     return 0;
 }
 
 int nphfuse_access(const char *path, int mask)
 {
+    log_msg("In access\n");
+    struct nphfs_file *search_result;
+    search_result = search(path);
+    if (search_result == NULL){
+    log_msg("ENOENT for path in access\n");
+    return -ENOENT;
+  }
+  
+
     return 0;
 //    return -1;
 }
@@ -552,6 +724,7 @@ int nphfuse_access(const char *path, int mask)
  */
 int nphfuse_ftruncate(const char *path, off_t offset, struct fuse_file_info *fi)
 {
+    log_msg("In ftruncate\n");
     return -1;
 }
 
@@ -568,7 +741,8 @@ int nphfuse_ftruncate(const char *path, off_t offset, struct fuse_file_info *fi)
  */
 int nphfuse_fgetattr(const char *path, struct stat *statbuf, struct fuse_file_info *fi)
 {
-        return -ENOENT;
+    log_msg("In fgetattr\n"); 
+    return -ENOENT;
 }
 
 void *nphfuse_init(struct fuse_conn_info *conn)
