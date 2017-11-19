@@ -65,7 +65,8 @@ void update_links(int data_offset,int flag){
   //log_msg("i=\"%d %d\"\n",i,*temp);
  if (*temp){
   node = npheap_alloc(NPHFS_DATA -> devfd,i,8192);
-  if(node->data_offset == data_offset){
+  //strcmp is to differentiate between hard and soft links.
+  if(node->data_offset == data_offset && (strcmp(node->symlink_path,"0") == 0) ){
     log_msg("update link for file \"%s\"\n",node->filename);
     node->metadata.st_nlink += flag;
   }
@@ -84,7 +85,7 @@ void update_metada(int data_offset,struct stat metadata){
   //log_msg("i=\"%d %d\"\n",i,*temp);
  if (*temp){
   node = npheap_alloc(NPHFS_DATA -> devfd,i,8192);
-  if(node->data_offset == data_offset){
+  if(node->data_offset == data_offset && (strcmp(node->symlink_path,"0") == 0) ){
     log_msg("update metadata for file \"%s\"\n",node->filename);
     node->metadata = metadata;
   }
@@ -208,9 +209,9 @@ int nphfuse_readlink(const char *path, char *link, size_t size)
   log_msg("search for path \"%s\" of length \"%d\" returned \"%s\"  \n",path,strlen(path),search_result->path);
   if(search_result != NULL){
     filename = split_path(search_result -> symlink_path);
-    strncpy(link,filename,size); 
+    strcpy(link,filename); 
     log_msg("Read link  \"%s\" is \"%s\"\n",link,filename);
-    return 0;
+    return strlen(filename);
   }
     log_msg("readlink returns -1 for  \"%s\" \n",path);
     return -1;
@@ -223,9 +224,63 @@ int nphfuse_readlink(const char *path, char *link, size_t size)
  */
 int nphfuse_mknod(const char *path, mode_t mode, dev_t dev)
 {
-    log_msg("In mknod\n");
-    return -ENOENT;
+  log_msg("In mknod of path \"%s\"\n",path);
+  int fsretval;
+  int dretval;
+  int fs_bmoffset;
+  int d_bmoffset;
+  char *filename;
+  char *parent_path;
+  struct fuse_context *context;
+  struct nphfs_file *parent;
+  struct nphfs_file *newfile = search(path);
+  if(path == NULL){
+    log_msg("\"%s\" : Illegal path \n",path);
+    return -1; 
+  }
+  if(newfile != NULL){
+    log_msg("\"%s\" : File already exists \n",path);
+    return -1; 
+  }
+  //Create a new file.
+  filename = split_path(path);
+  strncpy(parent_path, path, strlen(path)-strlen(filename));
+  parent = search(parent_path);
+  if (parent == NULL){
+    log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",path,parent_path);
+    return -1;
+  }
+  fs_bmoffset = search_bitmap(0);
+  d_bmoffset = search_bitmap(1);
+  log_msg("Creating new node for \"%s\" with parent \"%s\"\n",path,parent_path);
+  newfile = npheap_alloc(NPHFS_DATA->devfd,fs_bmoffset,8192);
+  fsretval = set_bitmap(0,fs_bmoffset,true);
+  dretval = set_bitmap(0,d_bmoffset,true);
+  log_msg("Return values for bitmaps d - \"%d\" and f -  \"%d\" \n",dretval,fsretval);
+  initialize_newnode(newfile);
+  strcpy(newfile->path,path);
+  strcpy(newfile->parent_path,parent_path);
+ newfile->fs_offset = fs_bmoffset;
+ //Changing data offset to that of oldfile to make it a symlink.
+ newfile->data_offset = d_bmoffset;
+ newfile->metadata.st_nlink = 1;
+ //Should increment numlink in parent.
+ parent->metadata.st_nlink ++;
+ context = fuse_get_context();
+ newfile->metadata.st_dev = dev;
+ newfile->metadata.st_mode = mode & ~(context->umask) & 0777; 
+ newfile->metadata.st_uid = context->uid;
+ newfile->metadata.st_gid = context->gid;
+ newfile->metadata.st_atime = (time_t)time(NULL);
+ newfile->metadata.st_mtime = (time_t)time(NULL);
+ newfile->metadata.st_ctime = (time_t)time(NULL);
+  //fdflag = 0 for files
+ newfile->fdflag = 0; 
+ strcpy(newfile->filename,filename);
+ log_msg("Link for path \"%s\" with has filename \"%s\"\n",path,newfile->filename);
+ return 0;
 }
+
 
 /** Create a directory */
 int nphfuse_mkdir(const char *path, mode_t mode)
