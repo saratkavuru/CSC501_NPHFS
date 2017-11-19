@@ -136,6 +136,7 @@ if(i>((flag+1)*8191))
   log_msg("Search bitmap returned -1\n");
   return -1;
 }
+log_msg("Search bitmap returned \"%d\"\n",i);
 return i;
 }
 
@@ -160,6 +161,7 @@ void initialize_newnode(struct nphfs_file *node){
 
 int nphfuse_getattr(const char *path, struct stat *stbuf)
 {
+  log_msg("In getattr for \"%s\"\n",path);
   int retval = 0;
   struct nphfs_file *search_result;
   if (path == NULL){
@@ -288,6 +290,7 @@ int nphfuse_mknod(const char *path, mode_t mode, dev_t dev)
 /** Create a directory */
 int nphfuse_mkdir(const char *path, mode_t mode)
 {
+  log_msg("In mkdir for path \"%s\"\n",path);
   int retval = 0;
   int res = 0;
   int fs_bmoffset = 0;
@@ -1009,7 +1012,7 @@ int nphfuse_opendir(const char *path, struct fuse_file_info *fi)
   search_result = search(path);
   if(search_result != NULL){
     search_result->pin_count++;
-    log_msg("Search result is  \"%s\" with fdflag  \"%s\"\n ",search_result->path,search_result->fdflag);
+    log_msg("Search result is  \"%s\" with fdflag  \"%d\"\n ",search_result->path,search_result->fdflag);
     return 0;
   }
  log_msg("directory \"%s\" doesn't exist\n ",path);
@@ -1088,7 +1091,7 @@ int nphfuse_releasedir(const char *path, struct fuse_file_info *fi)
   search_result = search(path);
   if(search_result != NULL){
     search_result->pin_count--;
-    log_msg("Search result is  \"%s\" with fdflag  \"%s\"\n ",search_result->path,search_result->fdflag);
+    log_msg("Search result is  \"%s\" with fdflag  \"%d\" and filename  \"%s\" and fs_offset \"%d\" and parent_path \"%s\"\n ",search_result->path,search_result->fdflag,search_result->filename,search_result->fs_offset,search_result->parent_path);
     return 0;
   }
  log_msg("directory \"%s\" doesn't exist\n ",path);
@@ -1193,6 +1196,7 @@ void *nphfuse_init(struct fuse_conn_info *conn)
   struct nphfs_file *search_result;
   log_msg("Line 579\n");
   initialize_newnode(root);
+  log_msg("Initialised root \"%s\" with fdflag  \"%d\" and filename  \"%s\" and fs_offset \"%d\" and parent_path \"%s\"\n ",root->path,root->fdflag,root->filename,root->fs_offset,root->parent_path);
   log_msg("Line 581\n");
   root->fs_offset = 2;
   root->metadata.st_mode = S_IFDIR | 0755; 
@@ -1207,10 +1211,10 @@ void *nphfuse_init(struct fuse_conn_info *conn)
   root->fdflag = 1; 
   strcpy(root->path,"/");
   strcpy(root->filename,"root");
-  log_msg("Root path \"%s\" and size \"%d\"\n",root->path,strlen(root->path));
+  log_msg("Root path \"%s\" and fdflag \"%d\"\n",root->path,root->fdflag);
+  log_msg("Finalised root \"%s\" with fdflag  \"%d\" and filename  \"%s\" and fs_offset \"%d\" and parent_path \"%s\"\n ",root->path,root->fdflag,root->filename,root->fs_offset,root->parent_path);
   search_result = search(root->path);
-  log_msg("Searched \"%s\" of length \"%d\" and got \"%s\" of length \"%d\"\n",root->path,strlen(root->path),search_result->path,strlen(search_result->path));
-  return NPHFS_DATA;
+  log_msg("Search result is  \"%s\" with fdflag  \"%d\" and filename  \"%s\" and fs_offset \"%d\" and parent_path \"%s\"\n ",search_result->path,search_result->fdflag,search_result->filename,search_result->fs_offset,search_result->parent_path);  return NPHFS_DATA;
 }
 
 /**
