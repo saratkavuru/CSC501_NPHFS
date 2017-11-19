@@ -156,7 +156,7 @@ void initialize_newnode(struct nphfs_file *node){
   memset(&node->metadata,0,sizeof(struct stat));
   node->fdflag = -1;
   strcpy(node->filename,"0");
-  node->fsize = 0;
+  node->filesize = 0;
 }
 
 int nphfuse_getattr(const char *path, struct stat *stbuf)
@@ -684,7 +684,7 @@ int nphfuse_open(const char *path, struct fuse_file_info *fi)
     return -ENOENT;
   }
    search_result = search(path);
-  log_msg("search for path \"%s\" of length \"%d\" returned \"%s\"  \n",path,strlen(path),search_result->path);
+  log_msg("search for path \"%s\" of length \"%d\" returned \"%s\" with fdflag \"%d\" \n",path,strlen(path),search_result->path,search_result->fdflag);
   if(search_result != NULL){
     search_result->pin_count++;
     log_msg("Changed pin_count for  \"%s\" \n",path);
@@ -712,10 +712,37 @@ int nphfuse_open(const char *path, struct fuse_file_info *fi)
 // returned by read.
 int nphfuse_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
-   log_msg("In Read file\n");
-   
-
-   return -ENOENT;
+   log_msg("In Read for path \"%s\"\n",path);
+   int i = 0;
+   struct nphfs_file *search_result;
+   char *data;
+  if (path == NULL){
+    log_msg("ENOENT for path in read\n");
+    return -ENOENT;
+  }
+  search_result = search(path);
+  log_msg("search for path \"%s\" of length \"%d\" returned \"%s\" with fdflag \"%d\" \n",path,strlen(path),search_result->path,search_result->fdflag);
+  if(search_result != NULL){
+    data = npheap_alloc(NPHFS_DATA->devfd,search_result->data_offset,8192);
+    data = data + offset;
+    log_msg("Read for offset \"%d\" and size \"%d\" and filesize\"%d\"\n",offset,size,search_result->filesize); 
+    if(search_result->filesize > offset+size){
+      memcpy(buf,data,size);
+      log_msg("Copied data for  \"%s\" of size \"%d\"\n",path,size);
+      return size;  
+    }
+    else if (search_result->filesize > offset){
+      memcpy(buf,data,search_result->filesize - offset);
+      //memcpy(buf+search_result->filesize - offset,0,size-(search_result->filesize - offset));
+      log_msg("Copied data for  \"%s\" of size \"%d\"\n",path,(search_result->filesize - offset));
+      return search_result->filesize - offset;
+    }
+    else {
+      log_msg("Reached EOF for offset \"%d\" and size \"%d\" and filesize\"%d\"\n",offset,size,search_result->filesize);
+    }
+  }
+    log_msg("Open returns -1 for  \"%s\" \n",path);
+    return -1;
 }
 
 /** Write data to an open file
@@ -728,8 +755,31 @@ int nphfuse_read(const char *path, char *buf, size_t size, off_t offset, struct 
 int nphfuse_write(const char *path, const char *buf, size_t size, off_t offset,
 	     struct fuse_file_info *fi)
 {
-    log_msg("In write file\n");
+   log_msg("In write for path \"%s\"\n",path);
+   struct nphfs_file *search_result;
+   char *data;
+  if (path == NULL){
+    log_msg("ENOENT for path in read\n");
     return -ENOENT;
+  }
+  search_result = search(path);
+  log_msg("search for path \"%s\" of length \"%d\" returned \"%s\" with fdflag \"%d\" \n",path,strlen(path),search_result->path,search_result->fdflag);
+  if(search_result != NULL){
+    data = npheap_alloc(NPHFS_DATA->devfd,search_result->data_offset,8192);
+    data = data + offset;
+    log_msg("Write for offset \"%d\" and size \"%d\" and filesize\"%d\"\n",offset,size,search_result->filesize); 
+    if(search_result->filesize - offset+size < 8191){
+      memcpy(data,buf,size);
+      log_msg("Copied data for  \"%s\" of size \"%d\"\n",path,size);
+      return size;  
+    }
+    else {
+      log_msg("Reached 8K limit for offset \"%d\" and size \"%d\" and filesize\"%d\"\n",offset,size,search_result->filesize);
+      return -1;
+    }
+  }
+    log_msg("File not found for  \"%s\" \n",path);
+    return -1;
 }
 
 /** Get file system statistics
@@ -977,6 +1027,7 @@ int nphfuse_fsyncdir(const char *path, int datasync, struct fuse_file_info *fi)
 int nphfuse_access(const char *path, int mask)
 {
     log_msg("In access\n");
+    int r=1;
     struct nphfs_file *search_result;
     search_result = search(path);
     if (search_result == NULL){
