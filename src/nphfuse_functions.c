@@ -34,18 +34,26 @@
 //Reserving offsets 0 and 1 for bitmaps
 bool *fsbitmap ;
 bool *dbitmap ;
+//struct nphfs_file* root;
 
 struct nphfs_file* search(const char *path){
   int i = 2 ;
  bool *temp ;
  temp = fsbitmap + 2;
  struct nphfs_file *search_result;
+  /*if (strcmp("/",path) == 0)
+  {
+    log_msg("search root directory\n"); 
+    return root;
+  }*/
  while(i < 8192){
  //log_msg("i=\"%d %d\"\n",i,*temp);
  if (*temp){
   log_msg("Searching offset \"%d\"\n",i);
   search_result = npheap_alloc(NPHFS_DATA -> devfd,i,8192);
+  log_msg("search for path \"%s\" of length \"%d\" found \"%s\"  \n",path,strlen(path),search_result->path);
   if(strcmp(search_result -> path,path)==0){
+    log_msg("search for path \"%s\" of length \"%d\" returned \"%s\"  \n",path,strlen(path),search_result->path);
     return search_result ; 
   }
  }
@@ -168,13 +176,29 @@ int nphfuse_getattr(const char *path, struct stat *stbuf)
     log_msg("ENOENT for path in getattr\n");
     return -ENOENT;
   }
+  if (strcmp("/",path) == 0)
+  {
+    log_msg("get attr of root directory\n");
+    memset(stbuf, 0, sizeof(struct stat));
+    stbuf->st_mode = S_IFDIR | 0777;
+    stbuf->st_nlink = 2;
+    stbuf->st_size = 8192; 
+    log_msg("get attr of root directory return\n");
+    return 0;
+  }
   
   search_result = search(path);
-  log_msg("line127\n");
   log_msg("search for path \"%s\" of length \"%d\" returned \"%s\"  \n",path,strlen(path),search_result->path);
   if(search_result != NULL){
     stbuf = &search_result->metadata;
     log_msg("getattr for path \"%s\" found\n",path);
+    log_msg("I-node number: %ld\n", (long) stbuf->st_ino);
+    log_msg("Mode:  %lo (octal)\n",(unsigned long) stbuf->st_mode);
+    log_msg("Link count: %ld\n", (long) stbuf->st_nlink);
+    log_msg("Ownership:  UID=%ld   GID=%ld\n", (long) stbuf->st_uid, (long) stbuf->st_gid);
+    log_msg("Last status change:   %s", ctime(&stbuf->st_ctime));
+    log_msg("Last file access:    %s", ctime(&stbuf->st_atime));
+    log_msg("Last file modification:  %s", ctime(&stbuf->st_mtime));
   }
   else{
     log_msg("getattr for path \"%s\" not found\n",path);
@@ -198,7 +222,7 @@ int nphfuse_getattr(const char *path, struct stat *stbuf)
 // nphfuse_readlink() code by Bernardo F Costa (thanks!)
 int nphfuse_readlink(const char *path, char *link, size_t size)
 {
-    log_msg("In Readlink\n");
+    log_msg("In readlink for path \"%s\"\n",path);
     char *filename;
     struct nphfs_file *search_result;
   if (path == NULL){
@@ -273,7 +297,7 @@ int nphfuse_mknod(const char *path, mode_t mode, dev_t dev)
  parent->metadata.st_nlink ++;
  context = fuse_get_context();
  newfile->metadata.st_dev = dev;
- newfile->metadata.st_mode = mode|S_IFREG; 
+ newfile->metadata.st_mode = S_IFREG|mode; 
  newfile->metadata.st_uid = context->uid;
  newfile->metadata.st_gid = context->gid;
  newfile->metadata.st_atime = (time_t)time(NULL);
@@ -334,7 +358,7 @@ int nphfuse_mkdir(const char *path, mode_t mode)
   //Should increment numlink in parent.
   parent->metadata.st_nlink ++;
   context = fuse_get_context() ;
-  newnode->metadata.st_mode = mode|S_IFDIR; 
+  newnode->metadata.st_mode = S_IFDIR|mode; 
   newnode->metadata.st_uid = context->uid;
   newnode->metadata.st_gid = context->gid;
   newnode->metadata.st_atime = (time_t)time(NULL);
@@ -350,8 +374,7 @@ int nphfuse_mkdir(const char *path, mode_t mode)
 /** Remove a file */
 int nphfuse_unlink(const char *path)
 {
-   log_msg("In Unlink\n");
-   int retdval = 1;
+   log_msg("In unlink for path \"%s\"\n",path);   int retdval = 1;
    int retfsval = 1;
    int ddval,dfsval;
    struct nphfs_file *search_result;
@@ -389,7 +412,7 @@ int nphfuse_unlink(const char *path)
 /** Remove a directory */
 int nphfuse_rmdir(const char *path)
 {
-  log_msg("In rmdir\n");
+  log_msg("In rmdir for path \"%s\"\n",path);
   int retval = 1;
   struct nphfs_file *search_result;
   if (path == NULL){
@@ -434,7 +457,7 @@ return retval;
 // unaltered, but insert the link into the mounted directory.
 int nphfuse_symlink(const char *path, const char *link)
 {
-  log_msg("In symbolic link\n");
+  log_msg("In symlink for path \"%s\" to \"%s\"\n",link,path);
   int fsretval;
   int dretval;
   int fs_bmoffset;
@@ -504,7 +527,7 @@ int nphfuse_symlink(const char *path, const char *link)
 // both path and newpath are fs-relative
 int nphfuse_rename(const char *path, const char *newpath)
 {
-   log_msg("In Rename\n");
+   log_msg("In rename from path \"%s\" to \"%s\"\n",path,newpath);
    char *filename;
    char *parent_path;
    struct nphfs_file *search_result = search(path);
@@ -543,7 +566,7 @@ int nphfuse_rename(const char *path, const char *newpath)
 /** Create a hard link to a file */
 int nphfuse_link(const char *path, const char *newpath)
 {
-  log_msg("In link\n");
+  log_msg("In link for path \"%s\" to \"%s\"\n",newpath,path);
   int fsretval;
   int dretval;
   int fs_bmoffset;
@@ -654,7 +677,6 @@ int nphfuse_chown(const char *path, uid_t uid, gid_t gid)
 /** Change the size of a file */
 int nphfuse_truncate(const char *path, off_t newsize)
 {
-   log_msg("In truncate\n");
    log_msg("In truncate for path \"%s\"\n",path);
    struct nphfs_file *search_result;
    char *data;
@@ -857,6 +879,7 @@ int nphfuse_statfs(const char *path, struct statvfs *statv)
   bool *temp =  dbitmap;
   statv->f_bsize =8192;
   statv->f_blocks = 8192;
+  //log_msg("bszie is \"%d\" \"%d\"\n",statv->f_bsize,statv->f_blocks);
   while(i<8192)
   {
     if(*temp)
@@ -866,6 +889,7 @@ int nphfuse_statfs(const char *path, struct statvfs *statv)
  }
  statv->f_bfree = 8192-cnt  ;
  statv->f_bavail = 8192-cnt ;
+ //log_msg("f_bfree is \"%d\" \"%d\"\n",statv->f_bfree,statv->f_bavail);
  cnt=0;
  i = 2;
  temp =  fsbitmap + 2;
@@ -877,8 +901,10 @@ int nphfuse_statfs(const char *path, struct statvfs *statv)
  temp++;
 } 
 statv->f_files = 8190;    
-statv->f_ffree = 8190 - cnt;    
+statv->f_ffree = 8190 - cnt; 
+//log_msg("f_files is \"%d\" \"%d\"\n",statv->f_files,statv->f_ffree);   
 statv->f_namemax = 250; 
+log_statvfs(statv);
 return 0; 
 }
 
@@ -1003,7 +1029,7 @@ int nphfuse_removexattr(const char *path, const char *name)
  */
 int nphfuse_opendir(const char *path, struct fuse_file_info *fi)
 {
-   log_msg("In opendir\n");
+   log_msg("In opendir for path \"%s\"\n",path);
    struct nphfs_file *search_result;
   if (path == NULL){
     log_msg("ENOENT for path \"%s\" in opendir\n",path);
@@ -1045,7 +1071,7 @@ int nphfuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t o
   struct fuse_file_info *fi)
 { 
 
-  log_msg("In Readdir\n");
+  log_msg("In readdir for path \"%s\"\n",path);
   struct nphfs_file *search_result;
   
   if (path == NULL){
@@ -1065,7 +1091,7 @@ int nphfuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t o
     search_result = npheap_alloc(NPHFS_DATA -> devfd,i,8192);
     if(strcmp(search_result -> parent_path,path)==0){
      if (!filler(buf,search_result->filename,&search_result->metadata,0)){
-      log_msg("File \"%s\" data copied to buffer\n",search_result->filename);
+      log_msg("File \"%s\" name copied to buffer\n",search_result->filename);
     }
     else {
       log_msg("Filler fail/buffer overflow for File \"%s\" ",search_result->filename);      
@@ -1082,7 +1108,7 @@ return 0;
  */
 int nphfuse_releasedir(const char *path, struct fuse_file_info *fi)
 {
-  log_msg("In Releasedir\n");
+  log_msg("In Releasedir for path \"%s\"\n",path);
   struct nphfs_file *search_result;
   if (path == NULL){
     log_msg("ENOENT for path \"%s\" in Releasedir\n",path);
@@ -1115,7 +1141,7 @@ int nphfuse_fsyncdir(const char *path, int datasync, struct fuse_file_info *fi)
 
 int nphfuse_access(const char *path, int mask)
 {
-    log_msg("In access\n");
+    log_msg("In access with path \"%s\"\n",path);
     struct nphfs_file *search_result;
     search_result = search(path);
     if (search_result == NULL){
@@ -1157,7 +1183,7 @@ int nphfuse_access(const char *path, int mask)
  */
 int nphfuse_ftruncate(const char *path, off_t offset, struct fuse_file_info *fi)
 {
-    log_msg("In ftruncate for path \n");
+    log_msg("In ftruncate for path \"%s\"\n",path);
     int retval = 1;
     retval = nphfuse_truncate(path,offset); 
     log_msg("Ftruncate for path \"%s\" returned \"%d\"\n",path,retval);
@@ -1178,7 +1204,10 @@ int nphfuse_ftruncate(const char *path, off_t offset, struct fuse_file_info *fi)
 int nphfuse_fgetattr(const char *path, struct stat *statbuf, struct fuse_file_info *fi)
 {
     log_msg("In fgetattr\n"); 
-    return -ENOENT;
+    int retval = 1; 
+    retval = nphfuse_getattr(path,statbuf); 
+    log_msg("fgetattr for path \"%s\" returned \"%d\"\n",path,retval);
+    return retval;
 }
 
 void *nphfuse_init(struct fuse_conn_info *conn)
@@ -1188,21 +1217,38 @@ void *nphfuse_init(struct fuse_conn_info *conn)
   log_fuse_context(fuse_get_context());
   fsbitmap = npheap_alloc(NPHFS_DATA -> devfd,0,8192);
   dbitmap = npheap_alloc(NPHFS_DATA -> devfd,1,8192);
+  //root = malloc(sizeof(struct nphfs_file));
+  struct fuse_context *context = fuse_get_context();
+  /*initialize_newnode(root);
+  root->fs_offset = 2;
+  root->fdflag = 1;
+  root->metadata.st_mode = S_IFDIR | 0777; 
+  root->metadata.st_size = 8192;
+  root->metadata.st_nlink = 1;
+  root->metadata.st_uid = context->uid;
+  root->metadata.st_gid = context->gid;
+  root->metadata.st_atime = (time_t)time(NULL);
+  root->metadata.st_mtime = (time_t)time(NULL);
+  root->metadata.st_ctime = (time_t)time(NULL);
+  strcpy(root->path,"/");
+  strcpy(root->filename,"root");*/
   log_msg("Line 574\n");
   if(!set_bitmap(0,2,true)){
     log_msg("Root created with path \n");
   } 
   struct nphfs_file *root = npheap_alloc(NPHFS_DATA -> devfd,2,8192);
   struct nphfs_file *search_result;
+  
   log_msg("Line 579\n");
   initialize_newnode(root);
   log_msg("Initialised root \"%s\" with fdflag  \"%d\" and filename  \"%s\" and fs_offset \"%d\" and parent_path \"%s\"\n ",root->path,root->fdflag,root->filename,root->fs_offset,root->parent_path);
   log_msg("Line 581\n");
   root->fs_offset = 2;
-  root->metadata.st_mode = S_IFDIR | 0755; 
+  root->metadata.st_mode = S_IFDIR | 0777; 
   root->metadata.st_nlink = 1;
-  root->metadata.st_uid = getuid();
-  root->metadata.st_gid = getgid();
+  root->metadata.st_size = 8192;
+  root->metadata.st_uid = context->uid;
+  root->metadata.st_gid = context->gid;
   root->metadata.st_atime = (time_t)time(NULL);
   root->metadata.st_mtime = (time_t)time(NULL);
   root->metadata.st_ctime = (time_t)time(NULL);
@@ -1215,6 +1261,7 @@ void *nphfuse_init(struct fuse_conn_info *conn)
   log_msg("Finalised root \"%s\" with fdflag  \"%d\" and filename  \"%s\" and fs_offset \"%d\" and parent_path \"%s\"\n ",root->path,root->fdflag,root->filename,root->fs_offset,root->parent_path);
   search_result = search(root->path);
   log_msg("Search result is  \"%s\" with fdflag  \"%d\" and filename  \"%s\" and fs_offset \"%d\" and parent_path \"%s\"\n ",search_result->path,search_result->fdflag,search_result->filename,search_result->fs_offset,search_result->parent_path);  
+
   return NPHFS_DATA;
 }
 
@@ -1228,4 +1275,6 @@ void *nphfuse_init(struct fuse_conn_info *conn)
 void nphfuse_destroy(void *userdata)
 {
     log_msg("\nnphfuse_destroy(userdata=0x%08x)\n", userdata);
+    //free(root);
+    log_msg("................................................\n");
 }
