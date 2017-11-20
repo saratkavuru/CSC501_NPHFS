@@ -148,11 +148,22 @@ log_msg("Search bitmap returned \"%d\"\n",i);
 return i;
 }
 
-// Returns /filename. So, we have to remove / for filename and remove length
-// of this from path.
+// Returns filename. split_parent returns parent name.
+
 char* split_path(const char *path){
- char *p =strrchr(path,'/');
-return p;
+    char *p = strrchr(path,'/');
+      return ++p;
+}
+
+char* split_parent(const char *path,char* filename){
+  char *p = malloc(strlen(path)-strlen(filename)-1);  
+  if((strlen(path)-strlen(filename)) == 1){
+        p = "/";
+    }
+    else{
+        strncpy(p,path,(strlen(path)-strlen(filename))-1);
+    }
+    return p;
 }
 
 void initialize_newnode(struct nphfs_file *node){
@@ -190,7 +201,8 @@ int nphfuse_getattr(const char *path, struct stat *stbuf)
   search_result = search(path);
   log_msg("search for path \"%s\" of length \"%d\" returned \"%s\"  \n",path,strlen(path),search_result->path);
   if(search_result != NULL){
-    stbuf = &search_result->metadata;
+    memset(stbuf, 0, sizeof(struct stat));
+    memcpy(stbuf,&search_result->metadata,sizeof(struct stat));
     log_msg("getattr for path \"%s\" found\n",path);
     log_msg("I-node number: %ld\n", (long) stbuf->st_ino);
     log_msg("Mode:  %lo (octal)\n",(unsigned long) stbuf->st_mode);
@@ -239,7 +251,7 @@ int nphfuse_readlink(const char *path, char *link, size_t size)
     return 0;
   }
     log_msg("readlink returns -1 for  \"%s\" \n",path);
-    return -1;
+    return -ENOENT;
 }
 
 /** Create a file node
@@ -261,23 +273,24 @@ int nphfuse_mknod(const char *path, mode_t mode, dev_t dev)
   struct nphfs_file *newfile = search(path);
   if(path == NULL){
     log_msg("\"%s\" : Illegal path \n",path);
-    return -1; 
+    return -ENOENT; 
   }
   if(newfile != NULL){
     log_msg("\"%s\" : File already exists \n",path);
-    return -1; 
+    return -EEXIST; 
   }
   //Create a new file.
   filename = split_path(path);
-  strncpy(parent_path, path, strlen(path)-strlen(filename));
+  parent_path = split_parent(path,filename);
+  log_msg("Parent : \"%s\" for \"%s\"\n",parent_path,path);
   parent = search(parent_path);
   if (parent == NULL){
     log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",path,parent_path);
-    return -1;
+    return -ENOENT;
   }
   if((parent != NULL) && (!parent->fdflag)){
     log_msg("Cannot create \"%s\" : Parent  \"%s\" is not a directory\n",path,parent_path);
-    return -1;
+    return -ENOTDIR;
   }
   fs_bmoffset = search_bitmap(0);
   d_bmoffset = search_bitmap(1);
@@ -296,7 +309,7 @@ int nphfuse_mknod(const char *path, mode_t mode, dev_t dev)
  //Should increment numlink in parent.
  parent->metadata.st_nlink ++;
  context = fuse_get_context();
- newfile->metadata.st_dev = dev;
+ newfile->metadata.st_rdev = dev;
  newfile->metadata.st_mode = S_IFREG|mode; 
  newfile->metadata.st_uid = context->uid;
  newfile->metadata.st_gid = context->gid;
@@ -329,21 +342,20 @@ int nphfuse_mkdir(const char *path, mode_t mode)
   search_result = search(path);
   if (search_result != NULL){
     log_msg("Cannot create \"%s\" : F/D already exists\n",path);
-    return -1;
+    return -EEXIST;
   }
   filename = split_path(path);
-  log_msg("filename for d \"%s\"\n",filename);
-  strncpy(parent_path, path, strlen(path)-strlen(filename));
-  log_msg("parent_path for d \"%s\"\n",parent_path);
+  parent_path = split_parent(path,filename);
+  log_msg("Parent : \"%s\" for \"%s\"\n",parent_path,path);
   parent = search(parent_path);
-  log_msg("parent for d \"%s\"\n",parent->path);
+  log_msg("parent found for d \"%s\"\n",parent->path);
   if (parent == NULL){
     log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",path,parent_path);
-    return -1;
+    return -ENOENT;
   }
   if((parent != NULL) && (!parent->fdflag)){
     log_msg("Cannot create \"%s\" : Parent  \"%s\" is not a directory\n",path,parent_path);
-    return -1;
+    return -ENOTDIR;
   }
   fs_bmoffset = search_bitmap(0);
   log_msg("Creating new node for \"%s\" with parent \"%s\"\n",path,parent_path);
@@ -384,6 +396,10 @@ int nphfuse_unlink(const char *path)
         search_result = search(path);
         if(search_result!= NULL)
         {     
+          if(search_result->fdflag){
+          log_msg("Cannot delete: File \"%s\" is a dir\n",search_result->filename);
+          return -EISDIR;
+          }
           update_links(search_result->data_offset,-1);
                 if(search_result->metadata.st_nlink == 0)
                 {       
@@ -400,13 +416,13 @@ int nphfuse_unlink(const char *path)
                     else{
                       log_msg("Cannot delete: File \"%s\" is in use\n",search_result->filename);
                       update_links(search_result->data_offset,1);
-                      return -1;
+                      return -EBUSY;
                     }
                 }
                 else
                 {       
                       log_msg("Search for path \"%s\" returned null\n",path);
-                      return -1;
+                      return -ENOENT;
                 }
         }
    return 0; 
@@ -425,11 +441,11 @@ int nphfuse_rmdir(const char *path)
   search_result = search(path);
   if (search_result == NULL){
     log_msg("Directory \"%s\" doesn't exist\n ",path);
-    return -1;
+    return -ENOENT ;
   }
   if(! search_result->fdflag){
     log_msg("Failed \"%s\" is a file.\n ",path);
-    return -1;
+    return -ENOTDIR;
   }
   //Find out whether the directory is empty 
   int i = 2 ;
@@ -440,7 +456,7 @@ int nphfuse_rmdir(const char *path)
     node = npheap_alloc(NPHFS_DATA -> devfd,i,8192);
     if(strcmp(node->parent_path,path) == 0){
      log_msg("Directory \"%s\" not empty\n ",path);
-     return -1;
+     return -ENOTEMPTY;
    }
  }
  i++;
@@ -473,23 +489,24 @@ int nphfuse_symlink(const char *path, const char *link)
   struct nphfs_file *newfile = search(link);
   if(oldfile == NULL){
     log_msg("\"%s\" : No such file or directory \n",path);
-    return -1; 
+    return -ENOTEMPTY; 
   }
   if(newfile != NULL){
     log_msg("\"%s\" : File already exists \n",path);
-    return -1; 
+    return -EEXIST; 
   }
     //Create a new file and copy the data_offset and metadata.
   filename = split_path(link);
-  strncpy(parent_path, link, strlen(link)-strlen(filename));
+  parent_path = split_parent(link,filename);
+  log_msg("Parent : \"%s\" for \"%s\"\n",parent_path,link);
   parent = search(parent_path);
   if (parent == NULL){
     log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",path,parent_path);
-    return -1;
+    return -ENOENT;
   }
   if((parent != NULL) && (!parent->fdflag)){
     log_msg("Cannot create \"%s\" : Parent  \"%s\" is not a directory\n",path,parent_path);
-    return -1;
+    return -ENOTDIR;
   }
   fs_bmoffset = search_bitmap(0);
   d_bmoffset = search_bitmap(1);
@@ -540,16 +557,16 @@ int nphfuse_rename(const char *path, const char *newpath)
         {  
            old_parent = search(search_result->parent_path);
            //Updating path,parent and filename of the file
-           char *filename = split_path(newpath);
-           strncpy(parent_path, newpath, strlen(newpath)-strlen(filename));
-           new_parent = search(parent_path);
+           filename = split_path(newpath );
+           parent_path = split_parent(newpath,filename);
+           log_msg("Parent : \"%s\" for \"%s\"\n",parent_path,path);
            if (new_parent == NULL){
              log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",newpath,parent_path);
-             return -1;
+             return -ENOTDIR;
             }
            if((new_parent != NULL) && (!new_parent->fdflag)){
              log_msg("Cannot create \"%s\" : Parent  \"%s\" is not a directory\n",newpath,parent_path);
-             return -1;
+             return -ENOTDIR;
             }
            strcpy(search_result->filename,filename);
            strcpy(search_result->parent_path,parent_path);
@@ -582,23 +599,23 @@ int nphfuse_link(const char *path, const char *newpath)
   struct nphfs_file *newfile = search(newpath);
   if(oldfile == NULL){
     log_msg("\"%s\" : No such file or directory \n",path);
-    return -1; 
+    return -ENOENT; 
   }
   if(newfile != NULL){
     log_msg("\"%s\" : File already exists \n",newpath);
-    return -1; 
+    return -EEXIST; 
   }
     //Create a new file and copy the data_offset and metadata.
   filename = split_path(newpath);
-  strncpy(parent_path, newpath, strlen(newpath)-strlen(filename));
-  parent = search(parent_path);
+  parent_path = split_parent(newpath,filename);
+  log_msg("Parent : \"%s\" for \"%s\"\n",parent_path,newpath);
   if (parent == NULL){
     log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",newpath,parent_path);
-    return -1;
+    return -ENOTDIR;
   }
   if((parent != NULL) && (!parent->fdflag)){
     log_msg("Cannot create \"%s\" : Parent  \"%s\" is not a directory\n",newpath,parent_path);
-    return -1;
+    return -ENOTDIR;
   }
   fs_bmoffset = search_bitmap(0);
   d_bmoffset = search_bitmap(1);
@@ -649,7 +666,7 @@ int nphfuse_chmod(const char *path, mode_t mode)
     return 0;
   }
     log_msg("Chmod returns -1 for  \"%s\" \n",path);
-    return -1;
+    return -ENOENT;
 }
 
 /** Change the owner and group of a file */
@@ -673,7 +690,7 @@ int nphfuse_chown(const char *path, uid_t uid, gid_t gid)
     return 0;
   }
     log_msg("Chmod returns -1 for  \"%s\" \n",path);
-    return -1;
+    return -ENOENT;
 }
 
 
@@ -708,7 +725,7 @@ int nphfuse_truncate(const char *path, off_t newsize)
     }
   }
     log_msg("File not found for  \"%s\" \n",path);
-    return -1;
+    return -ENOENT;
 }
 
 /** Change the access and/or modification times of a file */
@@ -738,7 +755,7 @@ int nphfuse_utime(const char *path, struct utimbuf *ubuf)
     return 0;
   }
     log_msg("utime returns -1 for  \"%s\" \n",path);
-    return -1;
+    return -ENOENT;
 }
 
 /** File open operation
@@ -754,10 +771,10 @@ int nphfuse_utime(const char *path, struct utimbuf *ubuf)
 int nphfuse_open(const char *path, struct fuse_file_info *fi)
 {
     log_msg("In open for path \"%s\"\n",path);
-    if ((fi->flags & O_ACCMODE) != O_RDONLY){
+    /*if ((fi->flags & O_ACCMODE) != O_RDONLY){
       log_msg("Not sure about this\n");
       return -EACCES;
-    }
+    }*/
     struct nphfs_file *search_result;
   if (path == NULL){
     log_msg("ENOENT for path in chmod\n");
@@ -771,7 +788,7 @@ int nphfuse_open(const char *path, struct fuse_file_info *fi)
     return 0;
   }
     log_msg("Open returns -1 for  \"%s\" \n",path);
-    return -1;
+    return -ENOENT;
 }
 
 /** Read data from an open file
@@ -824,7 +841,7 @@ int nphfuse_read(const char *path, char *buf, size_t size, off_t offset, struct 
     }
   }
     log_msg("Open returns -1 for  \"%s\" \n",path);
-    return -1;
+    return -ENOENT;
 }
 
 /** Write data to an open file
@@ -864,7 +881,7 @@ int nphfuse_write(const char *path, const char *buf, size_t size, off_t offset,
     }
   }
     log_msg("File not found for  \"%s\" \n",path);
-    return -1;
+    return -ENOENT;
 }
 
 /** Get file system statistics
@@ -977,7 +994,7 @@ int nphfuse_release(const char *path, struct fuse_file_info *fi)
     return 0;
   }
     log_msg("Release returns -1 for  \"%s\" \n",path);
-    return -1;
+    return -ENOENT;
 }
 
 /** Synchronize file contents
@@ -1045,7 +1062,7 @@ int nphfuse_opendir(const char *path, struct fuse_file_info *fi)
     return 0;
   }
  log_msg("directory \"%s\" doesn't exist\n ",path);
- return -1;
+ return -ENOENT;
 }
 
 /** Read directory
@@ -1124,7 +1141,7 @@ int nphfuse_releasedir(const char *path, struct fuse_file_info *fi)
     return 0;
   }
  log_msg("directory \"%s\" doesn't exist\n ",path);
- return -1;
+ return -ENOENT;
 }
 
 /** Synchronize directory contents
