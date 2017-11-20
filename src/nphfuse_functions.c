@@ -34,18 +34,18 @@
 //Reserving offsets 0 and 1 for bitmaps
 bool *fsbitmap ;
 bool *dbitmap ;
-//struct nphfs_file* root;
+struct nphfs_file* root;
 
 struct nphfs_file* search(const char *path){
   int i = 2 ;
  bool *temp ;
  temp = fsbitmap + 2;
  struct nphfs_file *search_result;
-  /*if (strcmp("/",path) == 0)
+  if (strcmp("/",path) == 0)
   {
     log_msg("search root directory\n"); 
     return root;
-  }*/
+  }
  while(i < 8192){
  //log_msg("i=\"%d %d\"\n",i,*temp);
  if (*temp){
@@ -202,7 +202,7 @@ int nphfuse_getattr(const char *path, struct stat *stbuf)
   }
   else{
     log_msg("getattr for path \"%s\" not found\n",path);
-    return -1;
+    return -ENOENT;
   }
   log_msg("getattr for path \"%s\" returned \"%d\"\n",path,retval);
   return retval;   
@@ -332,8 +332,11 @@ int nphfuse_mkdir(const char *path, mode_t mode)
     return -1;
   }
   filename = split_path(path);
+  log_msg("filename for d \"%s\"\n",filename);
   strncpy(parent_path, path, strlen(path)-strlen(filename));
+  log_msg("parent_path for d \"%s\"\n",parent_path);
   parent = search(parent_path);
+  log_msg("parent for d \"%s\"\n",parent->path);
   if (parent == NULL){
     log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",path,parent_path);
     return -1;
@@ -1217,9 +1220,9 @@ void *nphfuse_init(struct fuse_conn_info *conn)
   log_fuse_context(fuse_get_context());
   fsbitmap = npheap_alloc(NPHFS_DATA -> devfd,0,8192);
   dbitmap = npheap_alloc(NPHFS_DATA -> devfd,1,8192);
-  //root = malloc(sizeof(struct nphfs_file));
+  root = malloc(sizeof(struct nphfs_file));
   struct fuse_context *context = fuse_get_context();
-  /*initialize_newnode(root);
+  initialize_newnode(root);
   root->fs_offset = 2;
   root->fdflag = 1;
   root->metadata.st_mode = S_IFDIR | 0777; 
@@ -1231,8 +1234,8 @@ void *nphfuse_init(struct fuse_conn_info *conn)
   root->metadata.st_mtime = (time_t)time(NULL);
   root->metadata.st_ctime = (time_t)time(NULL);
   strcpy(root->path,"/");
-  strcpy(root->filename,"root");*/
-  log_msg("Line 574\n");
+  strcpy(root->filename,"root");
+  /*log_msg("Line 574\n");
   if(!set_bitmap(0,2,true)){
     log_msg("Root created with path \n");
   } 
@@ -1261,7 +1264,7 @@ void *nphfuse_init(struct fuse_conn_info *conn)
   log_msg("Finalised root \"%s\" with fdflag  \"%d\" and filename  \"%s\" and fs_offset \"%d\" and parent_path \"%s\"\n ",root->path,root->fdflag,root->filename,root->fs_offset,root->parent_path);
   search_result = search(root->path);
   log_msg("Search result is  \"%s\" with fdflag  \"%d\" and filename  \"%s\" and fs_offset \"%d\" and parent_path \"%s\"\n ",search_result->path,search_result->fdflag,search_result->filename,search_result->fs_offset,search_result->parent_path);  
-
+  */
   return NPHFS_DATA;
 }
 
@@ -1275,6 +1278,6 @@ void *nphfuse_init(struct fuse_conn_info *conn)
 void nphfuse_destroy(void *userdata)
 {
     log_msg("\nnphfuse_destroy(userdata=0x%08x)\n", userdata);
-    //free(root);
+    free(root);
     log_msg("................................................\n");
 }
