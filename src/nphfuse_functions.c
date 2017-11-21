@@ -720,9 +720,14 @@ int nphfuse_chown(const char *path, uid_t uid, gid_t gid)
   search_result = search(path);
   log_msg("search for path \"%s\" of length \"%d\" returned \"%s\"  \n",path,strlen(path),search_result->path);
   if(search_result != NULL){
+    if(uid != -1){
     search_result->metadata.st_uid = uid;
+    log_msg("Changed ownership for  \"%s\" \"%ld\" \n",path,uid);
+  }
+    if(gid != -1){
     search_result->metadata.st_gid = gid;
-    log_msg("Changed ownership for  \"%s\" \n",path);
+    log_msg("Changed ownership for  \"%s\" \"%ld\" \n",path,gid);
+  }
     search_result->metadata.st_ctime = (time_t)time(NULL);
     if(!search_result->fdflag){
     update_metadata(search_result->data_offset,search_result->metadata);
@@ -952,7 +957,7 @@ int nphfuse_write(const char *path, const char *buf, size_t size, off_t offset,
     }
     else {
       log_msg("Reached 8K limit for offset \"%d\" and size \"%d\" and filesize\"%d\"\n",offset,size,filesize);
-      return -EINVAL;
+      return 0;
     }
   }
     log_msg("File not found for  \"%s\" \n",path);
