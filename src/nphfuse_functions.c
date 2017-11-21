@@ -401,6 +401,9 @@ int nphfuse_unlink(const char *path)
  int retfsval = 1;
  int ddval = 1;
  int dfsval = 1;
+ char *filename;
+ char *parent_path;
+ struct nphfs_file *parent;
  struct nphfs_file *search_result;
  search_result = search(path);
  if(search_result == NULL) {
@@ -411,13 +414,23 @@ if(search_result->fdflag){
   log_msg("Cannot delete: File \"%s\" is a directory\n",search_result->filename);
   return -EISDIR;
 }
-
+  filename = split_path(path);
+  parent_path = split_parent(path,filename);
+  log_msg("Parent : \"%s\" for \"%s\"\n",parent_path,path);
+  parent = search(parent_path);
+  log_msg("parent found for d \"%s\"\n",parent->path);
+  if (parent == NULL){
+    log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",path,parent_path);
+    return -ENOENT;
+  }
 if(search_result->pin_count == 0){
   log_msg("Deleting file \"%s\" with link count \"%d\" \n",search_result->filename,search_result->metadata.st_nlink);
   dfsval = npheap_delete(NPHFS_DATA->devfd,search_result->fs_offset);
   retfsval = set_bitmap(0,search_result->fs_offset,false);
-  update_links(search_result->data_offset,-1);
-  if(search_result->metadata.st_nlink == 1){
+  search_result->metadata.st_nlink --;
+  parent->metadata.st_nlink --;
+  update_metadata(search_result->data_offset,search_result->metadata);
+  if(search_result->metadata.st_nlink == 0){
     //Deleting data only if it's the last link.
     retdval = set_bitmap(1,search_result->data_offset,false);
     ddval = npheap_delete(NPHFS_DATA->devfd,search_result->data_offset);
@@ -439,6 +452,9 @@ int nphfuse_rmdir(const char *path)
 {
   log_msg("In rmdir for path \"%s\"\n",path);
   int retval = 1;
+  char *filename;
+  char *parent_path;
+  struct nphfs_file *parent;
   struct nphfs_file *search_result;
   if (path == NULL){
     log_msg("ENOENT for path in rmdir\n");
@@ -452,6 +468,15 @@ int nphfuse_rmdir(const char *path)
   if(! search_result->fdflag){
     log_msg("Failed \"%s\" is a file.\n ",path);
     return -ENOTDIR;
+  }
+  filename = split_path(path);
+  parent_path = split_parent(path,filename);
+  log_msg("Parent : \"%s\" for \"%s\"\n",parent_path,path);
+  parent = search(parent_path);
+  log_msg("parent found for d \"%s\"\n",parent->path);
+  if (parent == NULL){
+    log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",path,parent_path);
+    return -ENOENT;
   }
   //Find out whether the directory is empty 
   int i = 2 ;
@@ -471,6 +496,8 @@ int nphfuse_rmdir(const char *path)
 //Deleting the directory if it's empty.
 retval = npheap_delete(NPHFS_DATA->devfd,search_result->fs_offset);
 set_bitmap(0,search_result->fs_offset,false);
+parent->metadata.st_size -= 64;
+parent->metadata.st_nlink --;
 log_msg("Directory \"%s\" should be deleted and retval is \"%d\" \n ",path,retval);
 return retval;
 }
@@ -639,8 +666,8 @@ int nphfuse_link(const char *path, const char *newpath)
  strcpy(newfile->parent_path,parent_path);
  newfile->fs_offset = fs_bmoffset;
  //Changing data offset since this is a file.
- //Not updating link =1 since update_links will handle it. 
- newfile->metadata.st_nlink = 1;
+ //Update metadata will handle this for the link. 
+ oldfile->metadata.st_nlink ++;
  //Should increment numlink in parent.
  parent->metadata.st_nlink ++;
   //fdflag = 0 for files
@@ -650,7 +677,7 @@ int nphfuse_link(const char *path, const char *newpath)
  //Make the link and update link counts
  newfile->data_offset = oldfile->data_offset;
  newfile->metadata = oldfile->metadata;
- update_links(newfile->data_offset,1);
+ update_metadata(oldfile->data_offset,oldfile->metadata);
  return 0;
 }
 
@@ -733,6 +760,7 @@ int nphfuse_truncate(const char *path, off_t newsize)
       memset(data+newsize,'\0',8192-newsize);
       search_result->metadata.st_size = newsize;
       parent->metadata.st_size -= (filesize-newsize);
+      update_metadata(search_result->data_offset,search_result->metadata);
       log_msg("Truncated data for  \"%s\" of size \"%d\"\n",path,newsize);
       return 0;  
     }
@@ -740,6 +768,7 @@ int nphfuse_truncate(const char *path, off_t newsize)
       memset(data+filesize,'\0',8192-filesize);
       search_result->metadata.st_size = newsize;
       parent->metadata.st_size += (newsize-filesize);
+      update_metadata(search_result->data_offset,search_result->metadata);
       log_msg("filesize < newsize  \"%d\" \n",path);
       return 0;
     }
@@ -902,6 +931,7 @@ int nphfuse_write(const char *path, const char *buf, size_t size, off_t offset,
     if(filesize - offset+size < 8192){
       memcpy(data,buf,size);
       search_result->metadata.st_size += size;
+      update_metadata(search_result->data_offset,search_result->metadata);
       parent->metadata.st_size += size;
       log_msg("Copied data for  \"%s\" of size \"%d\"\n",path,size);
       return size;  
