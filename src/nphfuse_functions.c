@@ -698,7 +698,9 @@ int nphfuse_chmod(const char *path, mode_t mode)
     search_result->metadata.st_mode = mode;
     log_msg("Changed mode for  \"%s\" \n",path);
     search_result->metadata.st_ctime = (time_t)time(NULL);
+    if(!search_result->fdflag){
     update_metadata(search_result->data_offset,search_result->metadata);
+    }
     return 0;
   }
     log_msg("Chmod returns -1 for  \"%s\" \n",path);
@@ -722,8 +724,10 @@ int nphfuse_chown(const char *path, uid_t uid, gid_t gid)
     search_result->metadata.st_gid = gid;
     log_msg("Changed ownership for  \"%s\" \n",path);
     search_result->metadata.st_ctime = (time_t)time(NULL);
+    if(!search_result->fdflag){
     update_metadata(search_result->data_offset,search_result->metadata);
-    return 0;
+    }
+        return 0;
   }
     log_msg("Chmod returns -1 for  \"%s\" \n",path);
     return -ENOENT;
@@ -806,7 +810,9 @@ int nphfuse_utime(const char *path, struct utimbuf *ubuf)
     }
     search_result->metadata.st_ctime = (time_t)time(NULL);
     log_msg("Changed utime for  \"%s\" \n",path);
+    if(!search_result->fdflag){
     update_metadata(search_result->data_offset,search_result->metadata);
+    }
     return 0;
   }
     log_msg("utime returns -1 for  \"%s\" \n",path);
