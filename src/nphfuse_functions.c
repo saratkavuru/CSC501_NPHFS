@@ -64,7 +64,7 @@ struct nphfs_file* search(const char *path){
 } 
 
 //Flag is 1 for increment and -1 for decrement
-void update_links(int data_offset,int flag){
+/*void update_links(int data_offset,int flag){
  int i = 2 ;
  bool *temp ;
  temp = fsbitmap + 2;
@@ -85,7 +85,7 @@ void update_links(int data_offset,int flag){
   i++;
   temp++;
  }
-} 
+} */
 
 void update_metadata(int data_offset,struct stat metadata){
   int i = 2 ;
@@ -96,7 +96,7 @@ void update_metadata(int data_offset,struct stat metadata){
   //log_msg("i=\"%d %d\"\n",i,*temp);
  if (*temp){
   node = npheap_alloc(NPHFS_DATA -> devfd,i,8192);
-  if(node->data_offset == data_offset && (strcmp(node->symlink_path,"0") == 0) ){
+  if(node->data_offset == data_offset){
     log_msg("update metadata for file \"%s\"\n",node->filename);
     node->metadata = metadata;
   }
@@ -249,9 +249,9 @@ int nphfuse_readlink(const char *path, char *link, size_t size)
   search_result = search(path);
   log_msg("search for path \"%s\" of length \"%d\" returned \"%s\"  \n",path,strlen(path),search_result->path);
   if(search_result != NULL){
-    filename = split_path(search_result -> symlink_path);
+    filename = search_result -> symlink_path;
     strcpy(link,filename); 
-    log_msg("Read link  \"%s\" is \"%s\"\n",link,filename);
+    log_msg("Read link  \"%s\" is \"%s\"\n",path,link);
     return 0;
   }
     log_msg("readlink returns -1 for  \"%s\" \n",path);
@@ -429,6 +429,11 @@ if(search_result->pin_count == 0){
   retfsval = set_bitmap(0,search_result->fs_offset,false);
   search_result->metadata.st_nlink --;
   parent->metadata.st_nlink --;
+  //edge case for symbolic link
+  if(strcmp(search_result->symlink_path,"0") != 0){
+    log_msg("Deleted link to \"%s\"\n",search_result->symlink_path);
+    return 0;
+  }
   update_metadata(search_result->data_offset,search_result->metadata);
   if(search_result->metadata.st_nlink == 0){
     //Deleting data only if it's the last link.
@@ -509,7 +514,7 @@ return retval;
 // unaltered, but insert the link into the mounted directory.
 int nphfuse_symlink(const char *path, const char *link)
 {
-  log_msg("In symlink for path \"%s\" to \"%s\"\n",link,path);
+  log_msg("In symlink for link \"%s\" to path \"%s\"\n",link,path);
   int fsretval;
   int dretval;
   int fs_bmoffset;
@@ -520,10 +525,7 @@ int nphfuse_symlink(const char *path, const char *link)
   struct nphfs_file *parent;
   struct nphfs_file *oldfile = search(path);
   struct nphfs_file *newfile = search(link);
-  if(oldfile == NULL){
-    log_msg("\"%s\" : No such file or directory \n",path);
-    return -ENOTEMPTY; 
-  }
+  
   if(newfile != NULL){
     log_msg("\"%s\" : File already exists \n",path);
     return -EEXIST; 
@@ -543,7 +545,7 @@ int nphfuse_symlink(const char *path, const char *link)
   }
   fs_bmoffset = search_bitmap(0);
   //d_bmoffset = search_bitmap(1);
-  log_msg("Creating new node for \"%s\" with parent \"%s\"\n",path,parent_path);
+  log_msg("Creating new node for \"%s\" with parent \"%s\"\n",link,parent_path);
   newfile = npheap_alloc(NPHFS_DATA->devfd,fs_bmoffset,8192);
   fsretval = set_bitmap(0,fs_bmoffset,true);
   //dretval = set_bitmap(1,d_bmoffset,true);
@@ -551,16 +553,17 @@ int nphfuse_symlink(const char *path, const char *link)
   initialize_newnode(newfile);
   strcpy(newfile->path,link);
   strcpy(newfile->parent_path,parent_path);
- newfile->fs_offset = fs_bmoffset;
+  newfile->fs_offset = fs_bmoffset;
  //Changing data offset to that of oldfile to make it a symlink.
- newfile->data_offset = oldfile->data_offset;
+ //newfile->data_offset = oldfile->data_offset;
  //Symlink_path should be updated to differentiate between hard and soft links.
- strcpy(newfile->symlink_path,path);
- newfile->metadata.st_nlink = 1;
+  strcpy(newfile->symlink_path,path);
+
+  newfile->metadata.st_nlink = 1;
  //Should increment numlink in parent.
  parent->metadata.st_nlink ++;
  context = fuse_get_context();
- newfile->metadata.st_size = strlen(split_path(newfile->symlink_path));
+ newfile->metadata.st_size = strlen(path);
  newfile->metadata.st_mode = S_IFLNK | 0777; 
  newfile->metadata.st_uid = context->uid;
  newfile->metadata.st_gid = context->gid;
