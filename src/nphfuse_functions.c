@@ -106,18 +106,17 @@ void update_metadata(int data_offset,struct stat metadata){
 int set_bitmap(int flag,int offset,bool value){
 //flag is 0 for fs and 1 for data bitmaps
 if(!flag){
-  log_msg("line 59\n");
   bool *temp;
-  log_msg("Line 61\n");
   temp = fsbitmap + offset;
-  log_msg("line 62\n");
   *temp = value;
+  log_msg("Set fs bitmap for offset \"%d\" - \"%d\"\n",offset,value);
   return 0;
 }
 else{
   bool *temp;
   temp = dbitmap + offset - 8192;
   *temp = value;
+  log_msg("Set d bitmap for offset \"%d\" - \"%d\"\n",offset,value);
   return 0;
 }
 return 1;
@@ -156,12 +155,14 @@ char* split_path(const char *path){
 }
 
 char* split_parent(const char *path,char* filename){
-  char *p = malloc(strlen(path)-strlen(filename)-1);  
+  char *p = malloc(strlen(path)-strlen(filename));  
   if((strlen(path)-strlen(filename)) == 1){
         p = "/";
     }
     else{
+        memset(p, '\0', strlen(path)-strlen(filename));
         strncpy(p,path,(strlen(path)-strlen(filename))-1);
+        //p[strlen(p)] = '\0';
     }
     return p;
 }
@@ -282,7 +283,8 @@ int nphfuse_mknod(const char *path, mode_t mode, dev_t dev)
   //Create a new file.
   filename = split_path(path);
   parent_path = split_parent(path,filename);
-  log_msg("Parent : \"%s\" for \"%s\"\n",parent_path,path);
+  log_msg("filename : \"%s\" of length \"%d\"\n",filename,strlen(filename));
+  log_msg("Parent : \"%s\" of length \"%d\" for \"%s\" of length \"%d\"\n",parent_path,strlen(parent_path),path,strlen(path));
   parent = search(parent_path);
   if (parent == NULL){
     log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",path,parent_path);
