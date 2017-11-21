@@ -596,8 +596,9 @@ int nphfuse_rename(const char *path, const char *newpath)
            filename = split_path(newpath );
            parent_path = split_parent(newpath,filename);
            log_msg("Parent : \"%s\" for \"%s\"\n",parent_path,path);
+           new_parent = search(parent_path);
            if (new_parent == NULL){
-             log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",newpath,parent_path);
+             log_msg("Cannot create \"%s\" : Parent  \"%s\"not found\n",newpath,parent_path);
              return -ENOTDIR;
             }
            if((new_parent != NULL) && (!new_parent->fdflag)){
@@ -612,10 +613,7 @@ int nphfuse_rename(const char *path, const char *newpath)
            new_parent->metadata.st_nlink ++;
            old_parent->metadata.st_size -= search_result->metadata.st_size;
            new_parent->metadata.st_size += search_result->metadata.st_size;
-
-
            return 0;
-
         }
 
     log_msg("Search for path \"%s\" returned null\n",path);  
@@ -768,6 +766,11 @@ int nphfuse_truncate(const char *path, off_t newsize)
       return 0;  
     }
     else {
+      if(newsize > 8192){
+        log_msg("Maximum file size is 8192\n");
+        return -EINVAL;
+      }
+
       memset(data+filesize,'\0',8192-filesize);
       search_result->metadata.st_size = newsize;
       parent->metadata.st_size += (newsize-filesize);
@@ -890,6 +893,7 @@ int nphfuse_read(const char *path, char *buf, size_t size, off_t offset, struct 
     }
     else {
       log_msg("Reached EOF for offset \"%d\" and size \"%d\" and filesize\"%d\"\n",offset,size,filesize);
+      return -EINVAL;
     }
   }
     log_msg("Open returns -1 for  \"%s\" \n",path);
@@ -941,7 +945,7 @@ int nphfuse_write(const char *path, const char *buf, size_t size, off_t offset,
     }
     else {
       log_msg("Reached 8K limit for offset \"%d\" and size \"%d\" and filesize\"%d\"\n",offset,size,filesize);
-      return -1;
+      return -EINVAL;
     }
   }
     log_msg("File not found for  \"%s\" \n",path);
@@ -1154,6 +1158,10 @@ int nphfuse_opendir(const char *path, struct fuse_file_info *fi)
 int nphfuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset,
   struct fuse_file_info *fi)
 { 
+   char *filename;
+   char *parent_path;
+   struct nphfs_file *parent;
+   int retval =1;
 
   log_msg("In readdir for path \"%s\"\n",path);
   struct nphfs_file *search_result;
@@ -1167,6 +1175,16 @@ int nphfuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t o
     log_msg("directory \"%s\" doesn't exist\n ",path);
     return -1;
   }
+  filename = split_path(path);
+  parent_path = split_parent(path,filename);
+  parent = search(parent_path);
+  if (parent == NULL){
+    log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",path,parent_path);
+    return -ENOENT;
+  }
+  retval = filler(buf,".",&search_result->metadata,0);
+  retval = filler(buf,"..",&parent->metadata,0);
+  
   //Fill all the nodes with parent_path=path in buffer 
   int i = 2 ;
   bool *temp = fsbitmap + 2;
