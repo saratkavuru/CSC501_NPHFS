@@ -939,9 +939,10 @@ int nphfuse_write(const char *path, const char *buf, size_t size, off_t offset,
   if(search_result != NULL){
     filesize = search_result->metadata.st_size;
     data = npheap_alloc(NPHFS_DATA->devfd,search_result->data_offset,8192);
-    data = data + offset;
+    
     log_msg("Write for offset \"%d\" and size \"%d\" and filesize\"%d\"\n",offset,size,filesize); 
-    if(filesize - offset+size < 8192){
+    if(offset+size < 8192){
+      data = data + offset;
       memcpy(data,buf,size);
       search_result->metadata.st_size += size;
       update_metadata(search_result->data_offset,search_result->metadata);
