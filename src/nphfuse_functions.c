@@ -74,11 +74,14 @@ void update_links(int data_offset,int flag){
  if (*temp){
   node = npheap_alloc(NPHFS_DATA -> devfd,i,8192);
   //strcmp is to differentiate between hard and soft links.
-  if(node->data_offset == data_offset && (strcmp(node->symlink_path,"0") == 0) ){
-    log_msg("update link for file \"%s\"\n",node->filename);
-    node->metadata.st_nlink += flag;
+  if(node->data_offset == data_offset){
+     
+     if(strcmp(node->symlink_path,"0") == 0) {
+       log_msg("update link for file \"%s\"\n",node->filename);
+       node->metadata.st_nlink += flag;
   }
  }
+}
   i++;
   temp++;
  }
@@ -299,7 +302,7 @@ int nphfuse_mknod(const char *path, mode_t mode, dev_t dev)
   log_msg("Creating new node for \"%s\" with parent \"%s\"\n",path,parent_path);
   newfile = npheap_alloc(NPHFS_DATA->devfd,fs_bmoffset,8192);
   fsretval = set_bitmap(0,fs_bmoffset,true);
-  dretval = set_bitmap(0,d_bmoffset,true);
+  dretval = set_bitmap(1,d_bmoffset,true);
   log_msg("Return values for bitmaps d - \"%d\" and f -  \"%d\" \n",dretval,fsretval);
   initialize_newnode(newfile);
   strcpy(newfile->path,path);
@@ -375,6 +378,8 @@ int nphfuse_mkdir(const char *path, mode_t mode)
   //Should increment numlink in parent.
   parent->metadata.st_nlink ++;
   context = fuse_get_context() ;
+  newnode->metadata.st_size = 64;
+  parent->metadata.st_size += 64;
   newnode->metadata.st_mode = S_IFDIR|mode; 
   newnode->metadata.st_uid = context->uid;
   newnode->metadata.st_gid = context->gid;
@@ -515,7 +520,7 @@ int nphfuse_symlink(const char *path, const char *link)
   log_msg("Creating new node for \"%s\" with parent \"%s\"\n",path,parent_path);
   newfile = npheap_alloc(NPHFS_DATA->devfd,fs_bmoffset,8192);
   fsretval = set_bitmap(0,fs_bmoffset,true);
-  dretval = set_bitmap(0,d_bmoffset,true);
+  dretval = set_bitmap(1,d_bmoffset,true);
   log_msg("Return values for bitmaps d - \"%d\" and f -  \"%d\" \n",dretval,fsretval);
   initialize_newnode(newfile);
   strcpy(newfile->path,link);
@@ -624,7 +629,7 @@ int nphfuse_link(const char *path, const char *newpath)
   log_msg("Creating new node for \"%s\" with parent \"%s\"\n",path,parent_path);
   newfile = npheap_alloc(NPHFS_DATA->devfd,fs_bmoffset,8192);
   fsretval = set_bitmap(0,fs_bmoffset,true);
-  dretval = set_bitmap(0,d_bmoffset,true);
+  dretval = set_bitmap(1,d_bmoffset,true);
   log_msg("Return values for bitmaps d - \"%d\" and f -  \"%d\" \n",dretval,fsretval);
  initialize_newnode(newfile);
  strcpy(newfile->path,newpath);
@@ -701,10 +706,20 @@ int nphfuse_truncate(const char *path, off_t newsize)
 {
    log_msg("In truncate for path \"%s\"\n",path);
    struct nphfs_file *search_result;
+   char *filename;
+   char *parent_path;
+   struct nphfs_file *parent;
    char *data;
    int filesize=0;
   if (path == NULL){
     log_msg("ENOENT for path in read\n");
+    return -ENOENT;
+  }
+  filename = split_path(path);
+  parent_path = split_parent(path,filename);
+  parent = search(parent_path);
+  if (parent == NULL){
+    log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",path,parent_path);
     return -ENOENT;
   }
   search_result = search(path);
@@ -716,12 +731,14 @@ int nphfuse_truncate(const char *path, off_t newsize)
     if(filesize > newsize){
       memset(data+newsize,'\0',8192-newsize);
       search_result->metadata.st_size = newsize;
+      parent->metadata.st_size -= (filesize-newsize);
       log_msg("Truncated data for  \"%s\" of size \"%d\"\n",path,newsize);
       return 0;  
     }
     else {
       memset(data+filesize,'\0',8192-filesize);
       search_result->metadata.st_size = newsize;
+      parent->metadata.st_size += (newsize-filesize);
       log_msg("filesize < newsize  \"%d\" \n",path);
       return 0;
     }
@@ -858,10 +875,20 @@ int nphfuse_write(const char *path, const char *buf, size_t size, off_t offset,
 {
    log_msg("In write for path \"%s\"\n",path);
    struct nphfs_file *search_result;
+   struct nphfs_file *parent;
+   char *filename;
+   char *parent_path;
    char *data;
    int filesize=0;
   if (path == NULL){
     log_msg("ENOENT for path in read\n");
+    return -ENOENT;
+  }
+  filename = split_path(path);
+  parent_path = split_parent(path,filename);
+  parent = search(parent_path);
+  if (parent == NULL){
+    log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",path,parent_path);
     return -ENOENT;
   }
   search_result = search(path);
@@ -874,6 +901,7 @@ int nphfuse_write(const char *path, const char *buf, size_t size, off_t offset,
     if(filesize - offset+size < 8192){
       memcpy(data,buf,size);
       search_result->metadata.st_size += size;
+      parent->metadata.st_size += size;
       log_msg("Copied data for  \"%s\" of size \"%d\"\n",path,size);
       return size;  
     }
