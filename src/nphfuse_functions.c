@@ -396,43 +396,42 @@ int nphfuse_mkdir(const char *path, mode_t mode)
 /** Remove a file */
 int nphfuse_unlink(const char *path)
 {
-   log_msg("In unlink for path \"%s\"\n",path);   int retdval = 1;
-   int retfsval = 1;
-   int ddval,dfsval;
-   struct nphfs_file *search_result;
-        search_result = search(path);
-        if(search_result!= NULL)
-        {     
-          if(search_result->fdflag){
-          log_msg("Cannot delete: File \"%s\" is a dir\n",search_result->filename);
-          return -EISDIR;
-          }
-          update_links(search_result->data_offset,-1);
-                if(search_result->metadata.st_nlink == 0)
-                {       
-                    if(search_result->pin_count == 0)
-                    {
-                     log_msg("Deleting file \"%s\" with link count \"%d\" \n",search_result->filename,search_result->metadata.st_nlink);
-                     ddval = npheap_delete(NPHFS_DATA->devfd,search_result->data_offset);
-                     retdval = set_bitmap(1,search_result->data_offset,false);
-                     dfsval = npheap_delete(NPHFS_DATA->devfd,search_result->fs_offset);
-                     retfsval = set_bitmap(0,search_result->fs_offset,false);
-                     log_msg("Return values for bitmaps d - \"%d\" and f -  \"%d\" \n",retdval,retfsval);
-                     log_msg("Return values for npheap delete d - \"%d\" and f -  \"%d\" \n",ddval,dfsval);
-                    }
-                    else{
-                      log_msg("Cannot delete: File \"%s\" is in use\n",search_result->filename);
-                      update_links(search_result->data_offset,1);
-                      return -EBUSY;
-                    }
-                }
-                else
-                {       
-                      log_msg("Search for path \"%s\" returned null\n",path);
-                      return -ENOENT;
-                }
-        }
-   return 0; 
+ log_msg("In unlink for path \"%s\"\n",path);
+ int retdval = 1;
+ int retfsval = 1;
+ int ddval = 1;
+ int dfsval = 1;
+ struct nphfs_file *search_result;
+ search_result = search(path);
+ if(search_result == NULL) {
+  log_msg("Search for path \"%s\" returned null\n",path);
+  return -ENOENT;
+}
+if(search_result->fdflag){
+  log_msg("Cannot delete: File \"%s\" is a directory\n",search_result->filename);
+  return -EISDIR;
+}
+
+if(search_result->pin_count == 0){
+  log_msg("Deleting file \"%s\" with link count \"%d\" \n",search_result->filename,search_result->metadata.st_nlink);
+  dfsval = npheap_delete(NPHFS_DATA->devfd,search_result->fs_offset);
+  retfsval = set_bitmap(0,search_result->fs_offset,false);
+  update_links(search_result->data_offset,-1);
+  if(search_result->metadata.st_nlink == 1){
+    //Deleting data only if it's the last link.
+    retdval = set_bitmap(1,search_result->data_offset,false);
+    ddval = npheap_delete(NPHFS_DATA->devfd,search_result->data_offset);
+  }
+  log_msg("Return values for bitmaps d - \"%d\" and f -  \"%d\" \n",retdval,retfsval);
+  log_msg("Return values for npheap delete d - \"%d\" and f -  \"%d\" \n",ddval,dfsval);
+  return 0;
+} 
+else{
+  log_msg("Cannot delete: File \"%s\" is in use\n",search_result->filename);
+  return -EBUSY;
+}
+ log_msg("Error in deleting link for \"%s\" \n",search_result->filename);
+ return -1; 
 }
 
 /** Remove a directory */
@@ -516,18 +515,18 @@ int nphfuse_symlink(const char *path, const char *link)
     return -ENOTDIR;
   }
   fs_bmoffset = search_bitmap(0);
-  d_bmoffset = search_bitmap(1);
+  //d_bmoffset = search_bitmap(1);
   log_msg("Creating new node for \"%s\" with parent \"%s\"\n",path,parent_path);
   newfile = npheap_alloc(NPHFS_DATA->devfd,fs_bmoffset,8192);
   fsretval = set_bitmap(0,fs_bmoffset,true);
-  dretval = set_bitmap(1,d_bmoffset,true);
-  log_msg("Return values for bitmaps d - \"%d\" and f -  \"%d\" \n",dretval,fsretval);
+  //dretval = set_bitmap(1,d_bmoffset,true);
+  log_msg("Return values for bitmaps f -  \"%d\" \n",fsretval);
   initialize_newnode(newfile);
   strcpy(newfile->path,link);
   strcpy(newfile->parent_path,parent_path);
  newfile->fs_offset = fs_bmoffset;
  //Changing data offset to that of oldfile to make it a symlink.
- newfile->data_offset = d_bmoffset;
+ newfile->data_offset = oldfile->data_offset;
  //Symlink_path should be updated to differentiate between hard and soft links.
  strcpy(newfile->symlink_path,path);
  newfile->metadata.st_nlink = 1;
@@ -581,6 +580,9 @@ int nphfuse_rename(const char *path, const char *newpath)
            //Updating link counts of old parent and new parent.
            old_parent->metadata.st_nlink --;
            new_parent->metadata.st_nlink ++;
+           old_parent->metadata.st_size -= search_result->metadata.st_size;
+           new_parent->metadata.st_size += search_result->metadata.st_size;
+
 
            return 0;
 
@@ -615,6 +617,7 @@ int nphfuse_link(const char *path, const char *newpath)
     //Create a new file and copy the data_offset and metadata.
   filename = split_path(newpath);
   parent_path = split_parent(newpath,filename);
+  parent = search(parent_path);
   log_msg("Parent : \"%s\" for \"%s\"\n",parent_path,newpath);
   if (parent == NULL){
     log_msg("Cannot create \"%s\" : Parent not found for \"%s\"\n",newpath,parent_path);
@@ -625,20 +628,19 @@ int nphfuse_link(const char *path, const char *newpath)
     return -ENOTDIR;
   }
   fs_bmoffset = search_bitmap(0);
-  d_bmoffset = search_bitmap(1);
+  //d_bmoffset = search_bitmap(1);
   log_msg("Creating new node for \"%s\" with parent \"%s\"\n",path,parent_path);
   newfile = npheap_alloc(NPHFS_DATA->devfd,fs_bmoffset,8192);
   fsretval = set_bitmap(0,fs_bmoffset,true);
-  dretval = set_bitmap(1,d_bmoffset,true);
-  log_msg("Return values for bitmaps d - \"%d\" and f -  \"%d\" \n",dretval,fsretval);
+  //dretval = set_bitmap(1,d_bmoffset,true);
+  log_msg("Return values for bitmaps  f -  \"%d\" \n",fsretval);
  initialize_newnode(newfile);
  strcpy(newfile->path,newpath);
  strcpy(newfile->parent_path,parent_path);
  newfile->fs_offset = fs_bmoffset;
- newfile->data_offset = d_bmoffset;
  //Changing data offset since this is a file.
  //Not updating link =1 since update_links will handle it. 
- //newnode->metadata.st_nlink = 1;
+ newfile->metadata.st_nlink = 1;
  //Should increment numlink in parent.
  parent->metadata.st_nlink ++;
   //fdflag = 0 for files
@@ -649,7 +651,6 @@ int nphfuse_link(const char *path, const char *newpath)
  newfile->data_offset = oldfile->data_offset;
  newfile->metadata = oldfile->metadata;
  update_links(newfile->data_offset,1);
-
  return 0;
 }
 
