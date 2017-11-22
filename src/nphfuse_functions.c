@@ -1,3 +1,4 @@
+//Project 3: Sarat Kavuru, skavuru; Rachit Thirani, rthiran;
 /*
   NPHeap File System
   Copyright (C) 2016 Hung-Wei Tseng, Ph.D. <hungwei_tseng@ncsu.edu>
@@ -298,7 +299,15 @@ int nphfuse_mknod(const char *path, mode_t mode, dev_t dev)
     return -ENOTDIR;
   }
   fs_bmoffset = search_bitmap(0);
+  if(fs_bmoffset == -1){
+     log_msg("Fbitmap returned -1 \n");
+    return -ENOMEM;
+  }
   d_bmoffset = search_bitmap(1);
+  if(d_bmoffset == -1){
+     log_msg("dbitmap returned -1 \n");
+    return -ENOMEM;
+  }
   log_msg("Creating new node for \"%s\" with parent \"%s\"\n",path,parent_path);
   newfile = npheap_alloc(NPHFS_DATA->devfd,fs_bmoffset,8192);
   fsretval = set_bitmap(0,fs_bmoffset,true);
@@ -313,6 +322,7 @@ int nphfuse_mknod(const char *path, mode_t mode, dev_t dev)
  newfile->metadata.st_nlink = 1;
  //Should increment numlink in parent.
  parent->metadata.st_nlink ++;
+ parent->metadata.st_ctime = (time_t)time(NULL);
  context = fuse_get_context();
  newfile->metadata.st_rdev = dev;
  newfile->metadata.st_mode = S_IFREG|mode; 
@@ -363,6 +373,10 @@ int nphfuse_mkdir(const char *path, mode_t mode)
     return -ENOTDIR;
   }
   fs_bmoffset = search_bitmap(0);
+  if(fs_bmoffset == -1){
+     log_msg("Fbitmap returned -1 \n");
+    return -ENOMEM;
+  }
   log_msg("Creating new node for \"%s\" with parent \"%s\"\n",path,parent_path);
   struct nphfs_file *newnode = npheap_alloc(NPHFS_DATA->devfd,fs_bmoffset,8192);
   res = set_bitmap(0,fs_bmoffset,true);
@@ -377,6 +391,7 @@ int nphfuse_mkdir(const char *path, mode_t mode)
   newnode->metadata.st_nlink = 2;
   //Should increment numlink in parent.
   parent->metadata.st_nlink ++;
+  parent->metadata.st_ctime = (time_t)time(NULL);
   context = fuse_get_context() ;
   newnode->metadata.st_size = 64;
   parent->metadata.st_size += 64;
@@ -429,6 +444,9 @@ if(search_result->pin_count == 0){
   retfsval = set_bitmap(0,search_result->fs_offset,false);
   search_result->metadata.st_nlink --;
   parent->metadata.st_nlink --;
+  parent->metadata.st_ctime = (time_t)time(NULL);
+  search_result->metadata.st_ctime = (time_t)time(NULL);
+
   //edge case for symbolic link
   if(strcmp(search_result->symlink_path,"0") != 0){
     log_msg("Deleted link to \"%s\"\n",search_result->symlink_path);
@@ -503,6 +521,8 @@ retval = npheap_delete(NPHFS_DATA->devfd,search_result->fs_offset);
 set_bitmap(0,search_result->fs_offset,false);
 parent->metadata.st_size -= 64;
 parent->metadata.st_nlink --;
+parent->metadata.st_ctime = (time_t)time(NULL);
+
 log_msg("Directory \"%s\" should be deleted and retval is \"%d\" \n ",path,retval);
 return retval;
 }
@@ -544,6 +564,10 @@ int nphfuse_symlink(const char *path, const char *link)
     return -ENOTDIR;
   }
   fs_bmoffset = search_bitmap(0);
+  if(fs_bmoffset == -1){
+     log_msg("Fbitmap returned -1 \n");
+    return -ENOMEM;
+  }
   //d_bmoffset = search_bitmap(1);
   log_msg("Creating new node for \"%s\" with parent \"%s\"\n",link,parent_path);
   newfile = npheap_alloc(NPHFS_DATA->devfd,fs_bmoffset,8192);
@@ -562,6 +586,8 @@ int nphfuse_symlink(const char *path, const char *link)
   newfile->metadata.st_nlink = 1;
  //Should increment numlink in parent.
  parent->metadata.st_nlink ++;
+ parent->metadata.st_ctime = (time_t)time(NULL);
+
  context = fuse_get_context();
  newfile->metadata.st_size = strlen(path);
  newfile->metadata.st_mode = S_IFLNK | 0777; 
@@ -613,6 +639,10 @@ int nphfuse_rename(const char *path, const char *newpath)
            new_parent->metadata.st_nlink ++;
            old_parent->metadata.st_size -= search_result->metadata.st_size;
            new_parent->metadata.st_size += search_result->metadata.st_size;
+           old_parent->metadata.st_ctime = (time_t)time(NULL);
+           new_parent->metadata.st_ctime = (time_t)time(NULL);
+
+
            return 0;
         }
 
@@ -656,6 +686,10 @@ int nphfuse_link(const char *path, const char *newpath)
     return -ENOTDIR;
   }
   fs_bmoffset = search_bitmap(0);
+  if(fs_bmoffset == -1){
+     log_msg("Fbitmap returned -1 \n");
+    return -ENOMEM;
+  }
   //d_bmoffset = search_bitmap(1);
   log_msg("Creating new node for \"%s\" with parent \"%s\"\n",path,parent_path);
   newfile = npheap_alloc(NPHFS_DATA->devfd,fs_bmoffset,8192);
@@ -669,8 +703,12 @@ int nphfuse_link(const char *path, const char *newpath)
  //Changing data offset since this is a file.
  //Update metadata will handle this for the link. 
  oldfile->metadata.st_nlink ++;
+ oldfile->metadata.st_ctime = (time_t)time(NULL);
+
  //Should increment numlink in parent.
  parent->metadata.st_nlink ++;
+ parent->metadata.st_ctime = (time_t)time(NULL);
+
   //fdflag = 0 for files
  newfile->fdflag = 0; 
  strcpy(newfile->filename,filename);
@@ -782,7 +820,10 @@ int nphfuse_truncate(const char *path, off_t newsize)
 
       memset(data+filesize,'\0',8192-filesize);
       search_result->metadata.st_size = newsize;
+      search_result->metadata.st_ctime = (time_t)time(NULL);
       parent->metadata.st_size += (newsize-filesize);
+      parent->metadata.st_ctime = (time_t)time(NULL);
+
       update_metadata(search_result->data_offset,search_result->metadata);
       log_msg("filesize < newsize  \"%d\" \n",path);
       return 0;
