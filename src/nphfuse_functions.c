@@ -21,6 +21,7 @@
 #include "nphfuse.h"
 #include <npheap.h>
 #include <stdbool.h>
+#include <sys/mman.h>
 ///////////////////////////////////////////////////////////
 //
 // Prototypes for all these functions, and the C-style comments,
@@ -36,12 +37,13 @@
 bool *fsbitmap ;
 bool *dbitmap ;
 struct nphfs_file* root;
+static __u64 failcount; 
 
 struct nphfs_file* search(const char *path){
   int i = 2 ;
  bool *temp ;
  temp = fsbitmap + 2;
- struct nphfs_file *search_result;
+ void *node;
   if (strcmp("/",path) == 0)
   {
     log_msg("search root directory\n"); 
@@ -50,14 +52,24 @@ struct nphfs_file* search(const char *path){
  while(i < 8192){
  //log_msg("i=\"%d %d\"\n",i,*temp);
  if (*temp){
+  
   log_msg("Searching offset \"%d\"\n",i);
-  search_result = npheap_alloc(NPHFS_DATA -> devfd,i,8192);
+  npheap_lock(NPHFS_DATA->devfd,i);
+  node = npheap_alloc(NPHFS_DATA->devfd,i,8192);
+  failcount ++;
+  npheap_unlock(NPHFS_DATA->devfd,i); 
+  if(node == -1){
+    log_msg("BIchokkoo for offset \"%d\"\n",i);
+  }
+  struct nphfs_file *search_result = (struct nphfs_file*)node;
+  log_msg("Address of offset \"%d\" is \"%p\" with failcount \"%ld\"\n",i,search_result,failcount);
   log_msg("search for path \"%s\" of length \"%d\" found \"%s\"  \n",path,strlen(path),search_result->path);
   if(strcmp(search_result -> path,path)==0){
     log_msg("search for path \"%s\" of length \"%d\" returned \"%s\"  \n",path,strlen(path),search_result->path);
     return search_result ; 
   }
  }
+ munmap(node,8192);
   i++;
   temp++;
  }
@@ -104,6 +116,7 @@ void update_metadata(int data_offset,struct stat metadata){
  }
   i++;
   temp++;
+  munmap(node,8192);
  }
 }
 
@@ -222,6 +235,7 @@ int nphfuse_getattr(const char *path, struct stat *stbuf)
     return -ENOENT;
   }
   log_msg("getattr for path \"%s\" returned \"%d\"\n",path,retval);
+  munmap(search_result,8192);
   return retval;   
 }
 
@@ -310,6 +324,7 @@ int nphfuse_mknod(const char *path, mode_t mode, dev_t dev)
   }
   log_msg("Creating new node for \"%s\" with parent \"%s\"\n",path,parent_path);
   newfile = npheap_alloc(NPHFS_DATA->devfd,fs_bmoffset,8192);
+  failcount ++;
   fsretval = set_bitmap(0,fs_bmoffset,true);
   dretval = set_bitmap(1,d_bmoffset,true);
   log_msg("Return values for bitmaps d - \"%d\" and f -  \"%d\" \n",dretval,fsretval);
@@ -335,6 +350,9 @@ int nphfuse_mknod(const char *path, mode_t mode, dev_t dev)
  newfile->fdflag = 0; 
  strcpy(newfile->filename,filename);
  log_msg("Link for path \"%s\" with has filename \"%s\"\n",path,newfile->filename);
+  munmap(newfile,8192);
+  munmap(parent,8192);
+
  return 0;
 }
 
@@ -405,6 +423,8 @@ int nphfuse_mkdir(const char *path, mode_t mode)
   newnode->fdflag = 1; 
   strcpy(newnode->filename,filename);
   log_msg("mkdir for path \"%s\" with mode \"%o\"returned \"%d\"\n",path,mode,retval);
+  munmap(newnode,8192);
+  munmap(parent,8192);
   return retval;
 }
 
@@ -446,6 +466,7 @@ if(search_result->pin_count == 0){
   parent->metadata.st_nlink --;
   parent->metadata.st_ctime = (time_t)time(NULL);
   search_result->metadata.st_ctime = (time_t)time(NULL);
+  munmap(parent,8192);
 
   //edge case for symbolic link
   if(strcmp(search_result->symlink_path,"0") != 0){
@@ -460,6 +481,7 @@ if(search_result->pin_count == 0){
   }
   log_msg("Return values for bitmaps d - \"%d\" and f -  \"%d\" \n",retdval,retfsval);
   log_msg("Return values for npheap delete d - \"%d\" and f -  \"%d\" \n",ddval,dfsval);
+  munmap(search_result,8192);
   return 0;
 } 
 else{
@@ -515,6 +537,7 @@ int nphfuse_rmdir(const char *path)
  }
  i++;
  temp++;
+ munmap(node,8192);
 }
 //Deleting the directory if it's empty.
 retval = npheap_delete(NPHFS_DATA->devfd,search_result->fs_offset);
@@ -522,7 +545,8 @@ set_bitmap(0,search_result->fs_offset,false);
 parent->metadata.st_size -= 64;
 parent->metadata.st_nlink --;
 parent->metadata.st_ctime = (time_t)time(NULL);
-
+munmap(parent,8192);
+munmap(search_result,8192);
 log_msg("Directory \"%s\" should be deleted and retval is \"%d\" \n ",path,retval);
 return retval;
 }
@@ -601,6 +625,9 @@ int nphfuse_symlink(const char *path, const char *link)
  strcpy(newfile->filename,filename);
  log_msg("Link for path \"%s\" with has filename \"%s\"\n",link,newfile->filename);
  //Make the link 
+ munmap(newfile,8192);
+ munmap(parent,8192);
+
  return 0;
 }
 
@@ -641,8 +668,9 @@ int nphfuse_rename(const char *path, const char *newpath)
            new_parent->metadata.st_size += search_result->metadata.st_size;
            old_parent->metadata.st_ctime = (time_t)time(NULL);
            new_parent->metadata.st_ctime = (time_t)time(NULL);
-
-
+           munmap(search_result,8192);
+           munmap(old_parent,8192);
+           munmap(new_parent,8192);
            return 0;
         }
 
@@ -717,6 +745,9 @@ int nphfuse_link(const char *path, const char *newpath)
  newfile->data_offset = oldfile->data_offset;
  newfile->metadata = oldfile->metadata;
  update_metadata(oldfile->data_offset,oldfile->metadata);
+ munmap(newfile,8192);
+ munmap(parent,8192);
+ munmap(oldfile,8192);
  return 0;
 }
 
@@ -739,6 +770,7 @@ int nphfuse_chmod(const char *path, mode_t mode)
     if(!search_result->fdflag){
     update_metadata(search_result->data_offset,search_result->metadata);
     }
+    munmap(search_result,8192);
     return 0;
   }
     log_msg("Chmod returns -1 for  \"%s\" \n",path);
@@ -770,7 +802,8 @@ int nphfuse_chown(const char *path, uid_t uid, gid_t gid)
     if(!search_result->fdflag){
     update_metadata(search_result->data_offset,search_result->metadata);
     }
-        return 0;
+    munmap(search_result,8192);
+    return 0;
   }
     log_msg("Chmod returns -1 for  \"%s\" \n",path);
     return -ENOENT;
@@ -803,6 +836,7 @@ int nphfuse_truncate(const char *path, off_t newsize)
   if(search_result != NULL){
     filesize = search_result->metadata.st_size;
     data = npheap_alloc(NPHFS_DATA->devfd,search_result->data_offset,8192);
+    failcount ++;
     log_msg("Truncate for oldsize \"%d\" and size \"%d\"\n",filesize,newsize); 
     if(filesize > newsize){
       memset(data+newsize,'\0',8192-newsize);
@@ -810,6 +844,9 @@ int nphfuse_truncate(const char *path, off_t newsize)
       parent->metadata.st_size -= (filesize-newsize);
       update_metadata(search_result->data_offset,search_result->metadata);
       log_msg("Truncated data for  \"%s\" of size \"%d\"\n",path,newsize);
+      munmap(search_result,8192);
+      munmap(data,8192);
+      munmap(parent,8192);
       return 0;  
     }
     else {
@@ -826,6 +863,9 @@ int nphfuse_truncate(const char *path, off_t newsize)
 
       update_metadata(search_result->data_offset,search_result->metadata);
       log_msg("filesize < newsize  \"%d\" \n",path);
+      munmap(search_result,8192);
+      munmap(data,8192);
+      munmap(parent,8192);
       return 0;
     }
   }
@@ -859,6 +899,7 @@ int nphfuse_utime(const char *path, struct utimbuf *ubuf)
     if(!search_result->fdflag){
     update_metadata(search_result->data_offset,search_result->metadata);
     }
+    munmap(search_result,8192);
     return 0;
   }
     log_msg("utime returns -1 for  \"%s\" \n",path);
@@ -892,6 +933,7 @@ int nphfuse_open(const char *path, struct fuse_file_info *fi)
   if(search_result != NULL){
     search_result->pin_count++;
     log_msg("Changed pin_count for  \"%s\" \n",path);
+    munmap(search_result,8192);
     return 0;
   }
     log_msg("Open returns -1 for  \"%s\" \n",path);
@@ -930,17 +972,22 @@ int nphfuse_read(const char *path, char *buf, size_t size, off_t offset, struct 
   if(search_result != NULL){
     filesize = search_result->metadata.st_size;
     data = npheap_alloc(NPHFS_DATA->devfd,search_result->data_offset,8192);
+    failcount ++;
     data = data + offset;
     log_msg("Read for offset \"%d\" and size \"%d\" and filesize\"%d\"\n",offset,size,filesize); 
     if(filesize > offset+size){
       memcpy(buf,data,size);
       log_msg("Copied data for  \"%s\" of size \"%d\"\n",path,size);
+      munmap(search_result,8192);
+      munmap(data,8192);
       return size;  
     }
     else if (filesize > offset){
       memcpy(buf,data,filesize - offset);
       //memcpy(buf+search_result->filesize - offset,0,size-(search_result->filesize - offset));
       log_msg("Copied data for  \"%s\" of size \"%d\"\n",path,(filesize - offset));
+      munmap(search_result,8192);
+      munmap(data,8192);
       return filesize - offset;
     }
     else {
@@ -985,7 +1032,7 @@ int nphfuse_write(const char *path, const char *buf, size_t size, off_t offset,
   if(search_result != NULL){
     filesize = search_result->metadata.st_size;
     data = npheap_alloc(NPHFS_DATA->devfd,search_result->data_offset,8192);
-    
+    failcount ++;
     log_msg("Write for offset \"%d\" and size \"%d\" and filesize\"%d\"\n",offset,size,filesize); 
     if(offset+size < 8192){
       data = data + offset;
@@ -994,10 +1041,16 @@ int nphfuse_write(const char *path, const char *buf, size_t size, off_t offset,
       update_metadata(search_result->data_offset,search_result->metadata);
       parent->metadata.st_size += size;
       log_msg("Copied data for  \"%s\" of size \"%d\"\n",path,size);
+      munmap(search_result,8192);
+      munmap(data,8192);
+      munmap(parent,8192);
       return size;  
     }
     else {
       log_msg("Reached 8K limit for offset \"%d\" and size \"%d\" and filesize\"%d\"\n",offset,size,filesize);
+      munmap(search_result,8192);
+      munmap(data,8192);
+      munmap(parent,8192);
       return 0;
     }
   }
@@ -1255,7 +1308,9 @@ int nphfuse_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t o
 }
 i++;
 temp++;
+munmap(search_result,8192);
 }
+munmap(parent,8192);
 return 0;
 }
 
@@ -1272,8 +1327,9 @@ int nphfuse_releasedir(const char *path, struct fuse_file_info *fi)
   search_result = search(path);
   if(search_result != NULL){
     search_result->pin_count--;
-    log_msg("Search result is  \"%s\" with fdflag  \"%d\" and filename  \"%s\" and fs_offset \"%d\" and parent_path \"%s\"\n ",search_result->path,search_result->fdflag,search_result->filename,search_result->fs_offset,search_result->parent_path);
-    return 0;
+    log_msg("Search result is  \"%s\" with fdflag  \"%d\" and filename  \"%s\" and fs_offset \"%d\" and parent_path \"%s\"\n ",search_result->path,search_result->fdflag,search_result->filename,search_result->fs_offset,search_result->parent_path);    
+    munmap(search_result,8192);
+return 0;
   }
  log_msg("directory \"%s\" doesn't exist\n ",path);
  return -ENOENT;
@@ -1372,6 +1428,7 @@ void *nphfuse_init(struct fuse_conn_info *conn)
   log_fuse_context(fuse_get_context());
   fsbitmap = npheap_alloc(NPHFS_DATA -> devfd,0,8192);
   dbitmap = npheap_alloc(NPHFS_DATA -> devfd,1,8192);
+  failcount = 2;
   root = malloc(sizeof(struct nphfs_file));
   struct fuse_context *context = fuse_get_context();
   initialize_newnode(root);
